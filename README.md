@@ -1,4 +1,4 @@
-# STALKER 2 Mod Merger Tool
+# STALKER 2 Mod Merging Script
 #### (Original Credits to 63OR63)
 
 ## Description
