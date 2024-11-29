@@ -6,6 +6,11 @@
 A tool designed to help merge multiple STALKER 2 mods, resolving conflicts between pak files automatically where possible and providing tools for manual merging where needed.
 ```
 
+## Credits
+```
+Original concept created by 63OR63
+Heavily modified by nova
+
 ## Key Features
 ```
 • Automatic detection of mod conflicts
@@ -92,10 +97,7 @@ For issues or questions, please post in the comments section. Include any releva
 I wanted a extended version of the original python script, and with more verification and validation of files.
 ```
 
-## Credits
-```
-Original concept created by 63OR63
-Heavily modified by nova
+
 
 Endorse if you find this tool useful!
 ```
