@@ -22,7 +22,7 @@ CUSTOM_MODS_PATH = r"E:\s2hoc\Stalker2\Content\Paks\~mods"
 
 
 
-SCRIPT_VERSION = "2.1" 
+SCRIPT_VERSION = "2.3" 
 
 
 
@@ -401,86 +401,242 @@ def execute_repak_list(pak_file):
 
 
 def get_file_size_from_pak(pak_file, file_entry):
-    """Version 1.0"""
+    """Version 2.0 - Gets file size from extracted file instead of repak command"""
     try:
-        result = subprocess.run(
-            [REPAK_PATH, "list", "--size", pak_file],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-        if result.returncode != 0:
-            return 'Unknown'
-
-        # Parse the output to find the file entry and extract its size
-        for line in result.stdout.strip().splitlines():
-            if file_entry in line:
-                parts = line.strip().split()
-                size = parts[-1]  # Assuming size is the last column
-                return size
+        # Get file from cache or extract it
+        extracted_path = pak_cache.get_extracted_path(pak_file, file_entry)
+        if not extracted_path or not extracted_path.exists():
+            if not pak_cache.extract_pak(pak_file):
+                return 'Unknown'
+            extracted_path = pak_cache.get_extracted_path(pak_file, file_entry)
+            
+        if extracted_path and extracted_path.exists():
+            return str(extracted_path.stat().st_size)
         return 'Unknown'
     except Exception as e:
         return 'Unknown'
 
 
 
+
+
+
+
 def build_file_tree(pak_sources):
-    """Version 2.2 - Improved organization and feedback"""
+    """Version 2.5 - Enhanced error handling and progress tracking, removed size command dependency
+    Builds file tree from PAK sources with comprehensive validation and source deduplication
+    """
     file_tree = {}
     file_count = defaultdict(int)
     file_sources = defaultdict(list)
     file_hashes = defaultdict(dict)
-
-    total_files = len(pak_sources)
-    print(color_text(f"\nBuilding file tree from {total_files} entries...", "cyan"))
-
-    # First pass - organize data
-    processed = 0
-    for pak_file, entry in pak_sources:
-        processed += 1
-        if processed % 100 == 0:  # Show progress every 100 files to avoid spam
-            print(color_text(f"→ Processing entry {processed} of {total_files}", "cyan"))
-
-        # Build tree structure
-        parts = entry.split('/')
-        current_level = file_tree
-        for part in parts[:-1]:
-            current_level = current_level.setdefault(part, {})
-        file_name = parts[-1]
-        current_level[file_name] = None
-
-        # Track file occurrences
-        file_count[entry] += 1
-        mod_name = Path(pak_file).stem
-        file_sources[entry].append([mod_name, pak_file])
-
-        # Get size and hash from cache
-        result = pak_cache.get_file_hash(pak_file, entry)
-        if result is not None:
-            file_size, file_hash = result
-            file_hashes[entry][mod_name] = (file_size, file_hash)
-        else:
-            print(color_text(f"⚠️ Warning: Could not get hash for {entry} in {mod_name}", "yellow"))
-            file_hashes[entry][mod_name] = ('Error', 'Error')
-
-    # Summary statistics
-    total_unique_files = len(file_sources)
-    files_with_conflicts = sum(1 for count in file_count.values() if count > 1)
     
-    print(color_text("\nFile Analysis Summary:", "magenta"))
-    print(color_text(f"✓ Total entries processed: {total_files}", "green"))
-    print(color_text(f"✓ Unique files found: {total_unique_files}", "green"))
-    if files_with_conflicts > 0:
-        print(color_text(f"⚠️ Files with multiple versions: {files_with_conflicts}", "yellow"))
-    else:
-        print(color_text("✓ No conflicting files found", "green"))
+    total_files = len(pak_sources)
+    processed = 0
+    errors = []
+    skipped = []
+    
+    print(color_text(f"\nBuilding file tree from {total_files} entries...", "cyan"))
+    
+    try:
+        update_interval = max(1, min(100, total_files // 20))
+        last_percentage = -1
+        
+        for pak_file, entry in pak_sources:
+            processed += 1
+            current_percentage = (processed * 100) // total_files
+            
+            if current_percentage != last_percentage and processed % update_interval == 0:
+                print(color_text(f"→ Progress: {current_percentage}% ({processed}/{total_files})", "cyan"))
+                last_percentage = current_percentage
+            
+            try:
+                if not entry or not isinstance(entry, str):
+                    skipped.append((pak_file, entry, "Invalid entry format"))
+                    continue
+                
+                parts = entry.split('/')
+                if not parts:
+                    skipped.append((pak_file, entry, "Empty path structure"))
+                    continue
+                
+                if not all(is_valid_path_component(part) for part in parts):
+                    skipped.append((pak_file, entry, "Invalid path component"))
+                    continue
+                
+                current_level = file_tree
+                for part in parts[:-1]:
+                    current_level = current_level.setdefault(part, {})
+                    if not isinstance(current_level, dict):
+                        raise ValueError(f"Path conflict: {entry}")
+                
+                file_name = parts[-1]
+                current_level[file_name] = None
+                
+                file_count[entry] += 1
+                mod_name = Path(pak_file).stem
+                
+                # New deduplication check before adding source
+                if not any(source[1] == pak_file for source in file_sources[entry]):
+                    file_sources[entry].append([mod_name, pak_file])
+                
+                # Get file size and hash from extracted file
+                try:
+                    extracted_path = pak_cache.get_extracted_path(pak_file, entry)
+                    if extracted_path and extracted_path.exists():
+                        file_size = extracted_path.stat().st_size
+                        md5_hash = hashlib.md5()
+                        with open(extracted_path, "rb") as f:
+                            for chunk in iter(lambda: f.read(65536), b''):
+                                md5_hash.update(chunk)
+                        file_hash = md5_hash.hexdigest()
+                        file_hashes[entry][mod_name] = (file_size, file_hash)
+                    else:
+                        error_msg = f"Failed to get hash for {entry} in {mod_name}"
+                        errors.append((pak_file, entry, error_msg))
+                        file_hashes[entry][mod_name] = ('Error', 'Error')
+                except Exception as e:
+                    error_msg = f"Hash calculation error: {str(e)}"
+                    errors.append((pak_file, entry, error_msg))
+                    file_hashes[entry][mod_name] = ('Error', 'Error')
+                
+            except Exception as e:
+                errors.append((pak_file, entry, str(e)))
+                continue
+        
+        # Generate statistics
+        total_unique_files = len(file_sources)
+        files_with_conflicts = sum(1 for count in file_count.values() if count > 1)
+        
+        # Print summary
+        print(color_text("\nFile Analysis Summary:", "magenta"))
+        print(color_text(f"✓ Total entries processed: {processed}", "green"))
+        print(color_text(f"✓ Unique files found: {total_unique_files}", "green"))
+        print(color_text(f"→ Files with conflicts: {files_with_conflicts}", "yellow" if files_with_conflicts else "green"))
+        
+        if errors:
+            print(color_text(f"\nProcessing Errors ({len(errors)}):", "red"))
+            print(color_text("First 5 errors:", "red"))
+            for pak, entry, error in errors[:5]:
+                print(color_text(f"❌ {shorten_path(pak)} - {entry}: {error}", "red"))
+            if len(errors) > 5:
+                print(color_text(f"...and {len(errors) - 5} more errors", "red"))
+        
+        if skipped:
+            print(color_text(f"\nSkipped Entries ({len(skipped)}):", "yellow"))
+            print(color_text("First 5 skipped:", "yellow"))
+            for pak, entry, reason in skipped[:5]:
+                print(color_text(f"⚠️ {shorten_path(pak)} - {entry}: {reason}", "yellow"))
+            if len(skipped) > 5:
+                print(color_text(f"...and {len(skipped) - 5} more skipped", "yellow"))
+        
+        if not file_tree:
+            raise ValueError("No valid file structure could be built")
+        
+        return file_tree, file_count, file_sources, file_hashes
+        
+    except Exception as e:
+        error_context = {
+            "operation": "File Tree Building",
+            "processed_files": f"{processed}/{total_files}",
+            "error": str(e),
+            "impact": "File tree construction failed",
+            "solution": "Check PAK file integrity and entry formats"
+        }
+        log_error_context(error_context)
+        raise RuntimeError(f"Failed to build file tree: {str(e)}")
 
-    # Validate tree structure
-    if not file_tree:
-        print(color_text("❌ Error: No valid file structure could be built", "red"))
-        return {}, defaultdict(int), defaultdict(list), defaultdict(dict)
 
-    return file_tree, file_count, file_sources, file_hashes
+
+
+
+
+# Helper function for build_file_tree
+def is_valid_path_component(component):
+    """Version 1.0 - Validates individual path components"""
+    if not component or not isinstance(component, str):
+        return False
+    # Add more specific validation as needed
+    # Example: Check for invalid characters, length limits, etc.
+    invalid_chars = '<>:"|?*'
+    return not any(char in component for char in invalid_chars)
+
+
+
+
+
+
+def is_merged_pak(pak_path):
+    """Version 1.0 - Checks if a PAK file is the merged PAK
+    
+    Args:
+        pak_path (Path): Path to PAK file
+    
+    Returns:
+        bool: True if this is the merged PAK, False otherwise
+    """
+    return pak_path.name.startswith("ZZZZZZZ_Merged")
+
+
+
+
+
+
+
+def handle_existing_merged_pak(mods_path):
+    """Version 2.0 - Enhanced merged PAK handling with user options"""
+    merged_pak = "ZZZZZZZ_Merged.pak"
+    merged_pak_path = Path(mods_path) / merged_pak
+    
+    try:
+        if merged_pak_path.exists():
+            print(color_text(f"\nFound existing merged PAK: {shorten_path(merged_pak_path)}", "cyan"))
+            
+            # Show options to user
+            print(color_text("\nChoose how to handle the existing merged PAK:", "magenta"))
+            print(color_text("1 - Include this merged PAK in new merge process", "white"))
+            print(color_text("2 - Backup this merged PAK and skip it", "white"))
+            print(color_text("3 - Cancel operation", "white"))
+            
+            while True:
+                try:
+                    choice = input(color_text("\nEnter your choice (1-3): ", "cyan")).strip()
+                    if choice == "1":
+                        print(color_text("\n→ Including existing merged PAK in merge process...", "cyan"))
+                        return {"success": True, "action": "include", "pak_path": merged_pak_path}
+                    elif choice == "2":
+                        # Create backup with timestamp
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        backup_name = f"ZZZZZZZ_Merged_OLD_{timestamp}.pakbackup"
+                        backup_path = merged_pak_path.parent / backup_name
+                        
+                        try:
+                            # Verify source file is accessible
+                            if not os.access(merged_pak_path, os.W_OK):
+                                print(color_text("❌ Cannot access existing merged PAK file", "red"))
+                                return {"success": False, "error": "Access denied"}
+                            
+                            # Perform the rename
+                            merged_pak_path.rename(backup_path)
+                            print(color_text(f"✓ Backed up existing merged PAK to: {backup_name}", "green"))
+                            return {"success": True, "action": "backup"}
+                            
+                        except Exception as e:
+                            print(color_text(f"❌ Failed to backup existing merged PAK: {str(e)}", "red"))
+                            return {"success": False, "error": str(e)}
+                    elif choice == "3":
+                        print(color_text("\nOperation cancelled by user.", "yellow"))
+                        return {"success": False, "action": "cancel"}
+                    else:
+                        print(color_text("Invalid choice. Please enter 1, 2, or 3.", "red"))
+                except ValueError:
+                    print(color_text("Invalid input. Please enter a number.", "red"))
+        
+        return {"success": True, "action": "none"}  # No existing merged PAK
+        
+    except Exception as e:
+        print(color_text(f"❌ Error handling existing merged PAK: {str(e)}", "red"))
+        return {"success": False, "error": str(e)}
 
 
 
@@ -534,10 +690,23 @@ def display_file_tree(file_tree, prefix="", file_count=None, full_path=""):
 
 
 
+
+
 def process_pak_files(pak_files, pak_cache):
-    """Version 2.6 - Improved feedback and organization"""
+    """Version 2.8 - Enhanced error handling and feedback, removed size command dependency
+    
+    Args:
+        pak_files (list): List of PAK file paths to process
+        pak_cache (PakCache): Cache object for PAK operations
+        
+    Returns:
+        list: List of tuples containing (pak_file, entry) pairs
+    """
     pak_sources = []
     total_paks = len(pak_files)
+    processed_paks = 0
+    failed_paks = []
+    skipped_entries = []
 
     if not isinstance(pak_cache, PakCache):
         raise ValueError("Invalid pak_cache object provided")
@@ -545,63 +714,141 @@ def process_pak_files(pak_files, pak_cache):
     print(color_text(f"\nAnalyzing {total_paks} PAK files...", "cyan"))
 
     for index, pak_file in enumerate(pak_files, 1):
-        if not os.path.isfile(pak_file):
-            print(color_text(f"❌ File not found: {shorten_path(pak_file)}", "red"))
-            continue
+        try:
+            # Clear status line and show current progress
+            print(color_text(f"\n[Processing PAK {index} of {total_paks}]", "white"))
+            print(color_text(f"File: {shorten_path(pak_file)}", "white"))
 
-        print(color_text(f"\n[Processing PAK {index} of {total_paks}] {shorten_path(pak_file)}", "white"))
-        
-        # Initial PAK validation
-        print(color_text("→ Validating PAK file...", "cyan"))
-        is_valid, error_message = validate_pak_file(pak_file)
-        if not is_valid:
-            print(color_text(f"❌ Invalid PAK detected: {error_message}", "red"))
-            log_corrupt_pak(pak_file, error_message)
-            if yes_or_no("Would you like to skip it and continue?"):
+            # Initial PAK validation
+            print(color_text("→ Validating PAK structure...", "cyan"))
+            is_valid, error_message = validate_pak_file(pak_file)
+            
+            if not is_valid:
+                error_context = {
+                    "operation": "PAK Validation",
+                    "file": shorten_path(pak_file),
+                    "error": error_message,
+                    "impact": "PAK will be skipped",
+                    "solution": "Check if PAK file is corrupted or incorrectly formatted"
+                }
+                log_error_context(error_context)
+                failed_paks.append((pak_file, error_message))
                 continue
-            else:
-                print(color_text("Terminating the process.", "red"))
-                input(color_text("\nPress Enter to close...", "cyan"))
-                sys.exit(1)
 
-        # Extract to cache
-        print(color_text("→ Extracting PAK contents...", "cyan"))
-        if not pak_cache.extract_pak(pak_file):
-            print(color_text(f"❌ Failed to extract {shorten_path(pak_file)} to cache.", "red"))
-            if yes_or_no("Would you like to skip it and continue?"):
+            # Extract to cache with progress feedback
+            print(color_text("→ Extracting PAK contents...", "cyan"))
+            extract_path = pak_cache.extract_pak(pak_file)
+            
+            if not extract_path:
+                error_context = {
+                    "operation": "PAK Extraction",
+                    "file": shorten_path(pak_file),
+                    "error": "Failed to extract PAK contents",
+                    "impact": "PAK will be skipped",
+                    "solution": "Check disk space and permissions"
+                }
+                log_error_context(error_context)
+                failed_paks.append((pak_file, "Extraction failed"))
                 continue
-            else:
-                print(color_text("Terminating the process.", "red"))
-                input(color_text("\nPress Enter to close...", "cyan"))
-                sys.exit(1)
 
-        # Process file entries
-        print(color_text("→ Reading file entries...", "cyan"))
-        file_entries = execute_repak_list(pak_file)
-        if file_entries is None:
-            print(color_text(f"❌ Failed to process {shorten_path(pak_file)}.", "red"))
-            if yes_or_no("Would you like to skip it and continue?"):
+            # Process file entries using standard list command
+            print(color_text("→ Reading file entries...", "cyan"))
+            result = subprocess.run(
+                [REPAK_PATH, "list", pak_file],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            if result.returncode != 0:
+                error_context = {
+                    "operation": "File Entry Reading",
+                    "file": shorten_path(pak_file),
+                    "error": result.stderr.strip(),
+                    "impact": "PAK will be skipped",
+                    "solution": "Check if PAK format is supported"
+                }
+                log_error_context(error_context)
+                failed_paks.append((pak_file, "Failed to read entries"))
                 continue
-            else:
-                print(color_text("Terminating the process.", "red"))
-                input(color_text("\nPress Enter to close...", "cyan"))
-                sys.exit(1)
-        else:
-            num_entries = len(file_entries)
-            print(color_text(f"✓ Found {num_entries} file entries", "green"))
-            pak_sources.extend((pak_file, entry) for entry in file_entries)
+
+            file_entries = result.stdout.strip().splitlines()
+
+            # Process entries with validation
+            valid_entries = 0
+            for entry in file_entries:
+                try:
+                    if not entry.strip():
+                        continue
+                        
+                    # Validate entry path
+                    if not is_valid_file_entry(entry):
+                        skipped_entries.append((pak_file, entry, "Invalid entry format"))
+                        continue
+
+                    pak_sources.append((pak_file, entry))
+                    valid_entries += 1
+
+                except Exception as e:
+                    skipped_entries.append((pak_file, entry, str(e)))
+
+            processed_paks += 1
+            print(color_text(f"✓ Processed {valid_entries} valid entries", "green"))
+
+        except Exception as e:
+            error_context = {
+                "operation": "PAK Processing",
+                "file": shorten_path(pak_file),
+                "error": str(e),
+                "impact": "PAK will be skipped",
+                "solution": "Check PAK file integrity"
+            }
+            log_error_context(error_context)
+            failed_paks.append((pak_file, str(e)))
 
     # Final summary
-    total_processed = len(pak_sources)
-    if total_processed == 0:
-        print(color_text("\n❌ No valid PAK files were processed. Exiting.", "red"))
-        input(color_text("\nPress Enter to close...", "cyan"))
-        sys.exit(1)
-    else:
-        print(color_text(f"\n✓ Successfully processed {len(pak_files)} PAK files", "green"))
-        print(color_text(f"✓ Total file entries found: {total_processed}", "green"))
+    print(color_text("\nProcessing Summary:", "magenta"))
+    print(color_text(f"✓ Successfully processed: {processed_paks} of {total_paks} PAKs", "green"))
+    
+    if failed_paks:
+        print(color_text(f"\nFailed PAKs ({len(failed_paks)}):", "red"))
+        for pak, error in failed_paks:
+            print(color_text(f"❌ {shorten_path(pak)}: {error}", "red"))
+    
+    if skipped_entries:
+        print(color_text(f"\nSkipped Entries ({len(skipped_entries)}):", "yellow"))
+        print(color_text("First 5 skipped entries:", "yellow"))
+        for pak, entry, reason in skipped_entries[:5]:
+            print(color_text(f"⚠️ {shorten_path(pak)} - {entry}: {reason}", "yellow"))
+        if len(skipped_entries) > 5:
+            print(color_text(f"...and {len(skipped_entries) - 5} more", "yellow"))
+
+    if not pak_sources:
+        error_msg = "No valid files were processed from any PAK file"
+        print(color_text(f"\n❌ {error_msg}", "red"))
+        raise ValueError(error_msg)
 
     return pak_sources
+
+
+
+# Helper functions needed for process_pak_files
+
+def is_valid_file_entry(entry):
+    """Version 1.0 - Validates file entry format"""
+    if not isinstance(entry, str):
+        return False
+    if not entry.strip():
+        return False
+    # Add more specific validation as needed
+    return True
+
+def log_error_context(context):
+    """Version 1.0 - Logs error context in a structured format"""
+    print(color_text("\nError Details:", "red"))
+    for key, value in context.items():
+        print(color_text(f"→ {key.title()}: {value}", "yellow"))
+
 
 
 
@@ -693,34 +940,37 @@ def unpack_pak(pak_file):
 
 
 def repack_pak():
-    """Version 1.7 - Improved feedback and validation"""
+    """Version 1.9 - Enhanced repack process with merged PAK handling"""
+    merged_pak = "ZZZZZZZ_Merged.pak"
+    merged_pak_path = Path(MODS) / merged_pak
+    
+    print(color_text(f"\nPreparing to repack merged files...", "cyan"))
+    
     try:
-        # Check if there are files to repack
-        if is_folder_empty(TEMP_REPACK_DIR):
-            raise Exception("No files found to repack.")
-
-        print(color_text(f"\nPreparing to repack merged files...", "white"))
-
-        merged_pak = "ZZZZZZZ_Merged.pak"
-        merged_pak_path = Path(MODS) / merged_pak
-
-        # Remove 'final_merged_' prefix from filenames
-        print(color_text("→ Processing merged files...", "cyan"))
-        files_processed = 0
-        for root, _, files in os.walk(TEMP_REPACK_DIR):
-            for file in files:
-                file_path = Path(root) / file
-                if file.startswith('final_merged_'):
-                    original_name = file.replace('final_merged_', '', 1)
-                    new_file_path = file_path.parent / original_name
-                    file_path.rename(new_file_path)
-                    files_processed += 1
-                    if files_processed % 10 == 0:  # Show progress every 10 files
-                        print(color_text(f"→ Processed {files_processed} files...", "cyan"))
-
-        print(color_text(f"✓ Processed {files_processed} files for repacking", "green"))
-
-        # Pack the files
+        # First handle any existing merged PAK
+        if not handle_existing_merged_pak(MODS):
+            raise ValueError("Failed to handle existing merged PAK")
+        
+        # Pre-repack validation checks
+        validation_results = perform_prerepack_checks(TEMP_REPACK_DIR, merged_pak_path)
+        if not validation_results["success"]:
+            raise ValueError(f"Pre-repack validation failed: {validation_results['error']}")
+        
+        print(color_text("\nValidation Summary:", "magenta"))
+        print(color_text(f"✓ Available disk space: {validation_results['disk_space_gb']:.2f} GB", "green"))
+        print(color_text(f"✓ Files to pack: {validation_results['file_count']}", "green"))
+        print(color_text(f"✓ Total size: {validation_results['total_size_mb']:.2f} MB", "green"))
+        
+        # Process files in repack directory
+        print(color_text("\n→ Processing files for repack...", "cyan"))
+        processed_files = process_repack_files(TEMP_REPACK_DIR)
+        
+        if not processed_files["success"]:
+            raise ValueError(f"File processing failed: {processed_files['error']}")
+            
+        print(color_text(f"✓ Processed {processed_files['count']} files", "green"))
+        
+        # Create the final PAK
         print(color_text("\n→ Creating final PAK file...", "cyan"))
         command = [
             REPAK_PATH,
@@ -730,53 +980,164 @@ def repack_pak():
             str(TEMP_REPACK_DIR),
             str(merged_pak_path)
         ]
-
+        
         result = subprocess.run(
             command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True
+            text=True,
+            check=False
         )
-
+        
         if result.returncode != 0:
             error_msg = result.stderr.strip()
-            print(color_text(f"\n❌ Error during repacking: {error_msg}", "red"))
-            sys.exit(1)
-
-        # Validate the created PAK
+            error_context = {
+                "operation": "PAK Creation",
+                "command": " ".join(command),
+                "error": error_msg,
+                "impact": "Failed to create merged PAK",
+                "solution": "Check repak tool and file permissions"
+            }
+            log_error_context(error_context)
+            raise RuntimeError(f"Repak command failed: {error_msg}")
+        
+        # Verify the merged PAK was created
         if merged_pak_path.exists():
             size_mb = merged_pak_path.stat().st_size / (1024 * 1024)
             print(color_text(f"\n✓ Successfully created merged PAK: {shorten_path(merged_pak_path)}", "green"))
             print(color_text(f"✓ PAK size: {size_mb:.2f} MB", "green"))
-
-            # Validate merged pak if enabled
+            
+            # Validate the merged PAK
             if VALIDATE_MERGED_PAK:
                 print(color_text("\n→ Validating merged PAK...", "cyan"))
                 is_valid, message = validate_merged_pak(merged_pak_path)
+                
                 if not is_valid:
                     print(color_text(f"\n❌ Validation Failed: {message}", "red"))
-                    if yes_or_no("Would you like to keep the merged pak anyway?"):
-                        print(color_text("→ Keeping merged PAK despite validation failure.", "yellow"))
-                    else:
+                    if not yes_or_no("Would you like to keep the merged pak anyway?"):
                         merged_pak_path.unlink()
-                        print(color_text("→ Merged PAK deleted due to validation failure.", "red"))
-                        sys.exit(1)
+                        raise ValueError(f"PAK validation failed: {message}")
+                    print(color_text("→ Keeping merged PAK despite validation failure.", "yellow"))
                 else:
                     print(color_text("\n✓ Merged PAK validation successful!", "green"))
+                    
+            # Verify permissions
+            try:
+                merged_pak_path.chmod(merged_pak_path.stat().st_mode | 0o666)  # Ensure file is readable
+            except Exception as e:
+                print(color_text(f"⚠️ Warning: Could not set permissions on merged PAK: {e}", "yellow"))
+                
         else:
-            print(color_text(f"\n❌ Failed to create merged PAK file", "red"))
-            sys.exit(1)
-
-    except subprocess.CalledProcessError as e:
-        print(color_text(f"\n❌ Error during repacking process: {e}", "red"))
-        sys.exit(1)
+            raise FileNotFoundError("Failed to create merged PAK file")
+            
     except Exception as e:
-        print(color_text(f"\n❌ Unexpected error during repacking: {e}", "red"))
-        sys.exit(1)
+        error_context = {
+            "operation": "PAK Repacking",
+            "error": str(e),
+            "impact": "Merged PAK creation failed",
+            "solution": "Check error details and try again"
+        }
+        log_error_context(error_context)
+        raise RuntimeError(f"Repack operation failed: {str(e)}")
+
+    return True
 
 
 
 
+
+
+
+def perform_prerepack_checks(repack_dir, output_path):
+    """Version 1.0 - Validates environment before repacking"""
+    try:
+        results = {
+            "success": False,
+            "error": None,
+            "disk_space_gb": 0,
+            "file_count": 0,
+            "total_size_mb": 0
+        }
+        
+        # Check if repack directory exists and is not empty
+        if not repack_dir.exists():
+            results["error"] = "Repack directory does not exist"
+            return results
+            
+        if is_folder_empty(repack_dir):
+            results["error"] = "No files found to repack"
+            return results
+        
+        # Calculate total size and count files
+        total_size = 0
+        file_count = 0
+        for root, _, files in os.walk(repack_dir):
+            for file in files:
+                file_path = Path(root) / file
+                total_size += file_path.stat().st_size
+                file_count += 1
+        
+        # Check disk space (need at least double the size for safety)
+        free_space = shutil.disk_usage(output_path.parent).free
+        required_space = total_size * 2.5  # Safety margin
+        
+        if free_space < required_space:
+            results["error"] = f"Insufficient disk space. Need {required_space/1024/1024/1024:.2f}GB, have {free_space/1024/1024/1024:.2f}GB"
+            return results
+        
+        # Update results
+        results["success"] = True
+        results["disk_space_gb"] = free_space / (1024**3)
+        results["file_count"] = file_count
+        results["total_size_mb"] = total_size / (1024**2)
+        
+        return results
+        
+    except Exception as e:
+        results["error"] = f"Pre-repack check failed: {str(e)}"
+        return results
+
+def process_repack_files(repack_dir):
+    """Version 1.0 - Processes and validates files before repacking"""
+    results = {
+        "success": False,
+        "error": None,
+        "count": 0
+    }
+    
+    try:
+        processed = 0
+        for root, _, files in os.walk(repack_dir):
+            for file in files:
+                file_path = Path(root) / file
+                if file.startswith('final_merged_'):
+                    new_name = file.replace('final_merged_', '', 1)
+                    new_path = file_path.parent / new_name
+                    file_path.rename(new_path)
+                processed += 1
+                
+        results["success"] = True
+        results["count"] = processed
+        return results
+        
+    except Exception as e:
+        results["error"] = f"File processing failed: {str(e)}"
+        return results
+
+
+
+
+
+def log_validation_status(step_name, passed, error=None):
+    """Version 1.0 - Unified validation status logging"""
+    if passed:
+        print(color_text(f"✓ {step_name} passed", "green"))
+    else:
+        if error:
+            print(color_text(f"❌ {step_name} failed: {error}", "red"))
+        else:
+            print(color_text(f"❌ {step_name} failed", "red"))
+    return passed
 
 
 
@@ -858,38 +1219,354 @@ def cleanup_temp_files():
 
 
 def validate_merged_pak(merged_pak_path):
-    """Version 1.0 - Validates merged pak file integrity"""
+    """Version 2.1 - Enhanced PAK validation with comprehensive checks"""
     if not VALIDATE_MERGED_PAK:
-        return True, "Validation skipped"
+        return True, "Validation skipped per configuration"
 
-    print(color_text("\nValidating merged pak file...", "cyan"))
+    print(color_text("\nInitiating merged PAK validation...", "cyan"))
+    validation_results = {
+        "pak_exists": False,
+        "size_check": False,
+        "structure_check": False,
+        "extraction_check": False,
+        "content_check": False,
+        "errors": []
+    }
     
     try:
-        # Clear validation directory if it exists
-        if VALIDATION_DIR.exists():
-            shutil.rmtree(VALIDATION_DIR)
-        VALIDATION_DIR.mkdir(parents=True)
+        # Step 1: Basic existence and size validation
+        validation_results["pak_exists"] = basic_pak_validation(merged_pak_path, validation_results)
+        if not validation_results["pak_exists"]:
+            return False, "PAK file does not exist or is empty"
+            
+        # Step 2: Validate PAK structure
+        print(color_text("→ Validating PAK structure...", "cyan"))
+        validation_results["structure_check"] = validate_pak_structure(merged_pak_path, validation_results)
+        if not validation_results["structure_check"]:
+            return False, "PAK structure validation failed"
+            
+        # Step 3: Extraction test
+        print(color_text("→ Testing PAK extraction...", "cyan"))
+        validation_results["extraction_check"] = validate_pak_extraction(merged_pak_path, validation_results)
+        if not validation_results["extraction_check"]:
+            return False, "PAK extraction validation failed"
+            
+        # Step 4: Content validation
+        print(color_text("→ Validating PAK contents...", "cyan"))
+        validation_results["content_check"] = validate_pak_contents(merged_pak_path, validation_results)
+        if not validation_results["content_check"]:
+            return False, "PAK content validation failed"
+        
+        # Generate validation report with properly formatted data
+        validation_report = []  # List for successful validations
+        validation_errors = []  # List for any errors found
+        
+        # Add validation results to appropriate lists
+        for check, result in validation_results.items():
+            if check != "errors":
+                if result:
+                    validation_report.append(f"Passed: {check}")
+                else:
+                    validation_errors.append(f"Failed: {check}")
+        
+        # Add any collected errors
+        validation_errors.extend(validation_results.get("errors", []))
+        
+        # Generate report
+        generate_validation_report(validation_report, validation_errors)
+        
+        # Final validation status
+        if validation_results["errors"]:
+            error_summary = "\n".join(validation_results["errors"][:3])
+            return False, f"Validation failed with errors:\n{error_summary}"
+            
+        return True, "All validation checks passed successfully"
+        
+    except Exception as e:
+        error_msg = f"Validation failed with error: {str(e)}"
+        print(color_text(f"\n❌ {error_msg}", "red"))
+        return False, error_msg
 
-        # Extract merged pak for validation
+
+
+
+
+
+
+# Helper functions for validate_merged_pak
+
+def basic_pak_validation(pak_path, results):
+    """Version 1.0 - Performs basic PAK file validation"""
+    try:
+        print(color_text("→ Checking PAK file basics...", "cyan"))
+        
+        if not pak_path.exists():
+            results["errors"].append("PAK file does not exist")
+            return False
+            
+        file_size = pak_path.stat().st_size
+        if file_size == 0:
+            results["errors"].append("PAK file is empty")
+            return False
+            
+        min_size = 100  # Minimum reasonable size in bytes
+        if file_size < min_size:
+            results["errors"].append(f"PAK file suspiciously small: {file_size} bytes")
+            return False
+            
+        print(color_text(f"✓ Basic validation passed - Size: {file_size/1024/1024:.2f} MB", "green"))
+        results["size_check"] = True
+        return True
+        
+    except Exception as e:
+        results["errors"].append(f"Basic validation error: {str(e)}")
+        return False
+
+def validate_pak_structure(pak_path, results):
+    """Version 1.0 - Validates PAK file structure"""
+    try:
+        # Use repak to list contents and verify structure
+        command = [REPAK_PATH, "list", str(pak_path)]
         result = subprocess.run(
-            [REPAK_PATH, "unpack", merged_pak_path, "--output", str(VALIDATION_DIR)],
+            command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True
+            text=True,
+            check=False
         )
-
+        
         if result.returncode != 0:
-            return False, f"Failed to extract merged pak: {result.stderr.strip()}"
-
-        # Compare files with original merged files
-        return compare_extracted_files(TEMP_REPACK_DIR, VALIDATION_DIR)
-
+            results["errors"].append(f"Structure validation failed: {result.stderr.strip()}")
+            return False
+            
+        # Analyze file listing
+        file_listing = result.stdout.strip().splitlines()
+        if not file_listing:
+            results["errors"].append("PAK contains no files")
+            return False
+            
+        print(color_text(f"✓ Structure validation passed - Found {len(file_listing)} files", "green"))
+        return True
+        
     except Exception as e:
-        return False, f"Validation error: {str(e)}"
+        results["errors"].append(f"Structure validation error: {str(e)}")
+        return False
+
+def validate_pak_extraction(pak_path, results):
+    """Version 1.0 - Validates PAK extraction"""
+    temp_extract_path = None
+    try:
+        # Create temporary extraction directory
+        temp_extract_path = create_unique_temp_dir(TEMP_VALIDATION_DIR, "extraction_test")
+        
+        # Try to extract PAK
+        command = [REPAK_PATH, "unpack", str(pak_path), "--output", str(temp_extract_path)]
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False
+        )
+        
+        if result.returncode != 0:
+            results["errors"].append(f"Extraction test failed: {result.stderr.strip()}")
+            return False
+            
+        # Verify extraction results
+        extracted_files = list(temp_extract_path.rglob('*'))
+        if not any(f.is_file() for f in extracted_files):
+            results["errors"].append("No files found after extraction")
+            return False
+            
+        print(color_text("✓ Extraction validation passed", "green"))
+        return True
+        
+    except Exception as e:
+        results["errors"].append(f"Extraction validation error: {str(e)}")
+        return False
     finally:
-        # Cleanup validation directory
-        if VALIDATION_DIR.exists():
-            shutil.rmtree(VALIDATION_DIR)
+        # Cleanup
+        if temp_extract_path and temp_extract_path.exists():
+            shutil.rmtree(temp_extract_path, ignore_errors=True)
+
+
+
+
+
+
+
+
+def validate_pak_contents(pak_path, results):
+    """Version 2.1 - Enhanced basic error checking and logging"""
+    try:
+        print(color_text("\n→ Starting content validation...", "cyan"))
+        
+        # Basic existence check
+        if not pak_path.exists():
+            print(color_text(f"❌ PAK file not found at: {pak_path}", "red"))
+            results["errors"].append("PAK file not found")
+            return False
+            
+        # Get file listing with basic error handling
+        print(color_text("→ Getting file listing...", "cyan"))
+        command = [REPAK_PATH, "list", str(pak_path)]
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False
+        )
+        
+        if result.returncode != 0:
+            error_msg = f"Content listing failed: {result.stderr.strip()}"
+            print(color_text(f"❌ {error_msg}", "red"))
+            results["errors"].append(error_msg)
+            return False
+            
+        # Basic content analysis
+        file_listing = result.stdout.strip().splitlines()
+        if not file_listing:
+            print(color_text("❌ No files found in PAK", "red"))
+            results["errors"].append("PAK contains no files")
+            return False
+            
+        # Analyze content structure
+        print(color_text("→ Analyzing content structure...", "cyan"))
+        content_stats = analyze_pak_contents(file_listing)
+        
+        # Print detailed statistics
+        print(color_text("\nContent Statistics:", "cyan"))
+        print(color_text(f"→ Total files: {content_stats['total_files']}", "white"))
+        print(color_text(f"→ Total size: {content_stats['total_size_mb']:.2f} MB", "white"))
+        
+        if content_stats['empty_files'] > 0:
+            print(color_text(f"⚠️ Found {content_stats['empty_files']} empty files", "yellow"))
+            results["errors"].append(f"Found {content_stats['empty_files']} empty files")
+            
+        if content_stats['suspicious_files'] > 0:
+            print(color_text(f"⚠️ Found {content_stats['suspicious_files']} suspicious files", "yellow"))
+            
+        if content_stats["has_errors"]:
+            print(color_text("❌ Content validation failed - see above warnings", "red"))
+            return False
+            
+        print(color_text("✓ Content validation passed", "green"))
+        return True
+        
+    except Exception as e:
+        error_msg = f"Content validation error: {str(e)}"
+        print(color_text(f"❌ {error_msg}", "red"))
+        results["errors"].append(error_msg)
+        return False
+
+
+
+
+
+
+
+def analyze_pak_contents(file_listing):
+    """Version 2.1 - Basic content analysis with improved error checking"""
+    stats = {
+        "total_files": 0,
+        "empty_files": 0,
+        "suspicious_files": 0,
+        "total_size": 0,
+        "total_size_mb": 0,
+        "has_errors": False
+    }
+    
+    try:
+        print(color_text("→ Analyzing PAK contents...", "cyan"))
+        
+        for line in file_listing:
+            if not line.strip():
+                continue
+                
+            stats["total_files"] += 1
+            
+            # Basic file entry validation
+            try:
+                # Check if entry appears valid
+                if '/' in line:  # Has path separator
+                    parts = line.split('/')
+                    if not all(part.strip() for part in parts):
+                        print(color_text(f"⚠️ Invalid path structure: {line}", "yellow"))
+                        stats["has_errors"] = True
+                        continue
+                        
+                if len(line) > 260:  # Windows max path
+                    print(color_text(f"⚠️ Path too long: {line}", "yellow"))
+                    stats["has_errors"] = True
+                    
+            except Exception as e:
+                print(color_text(f"⚠️ Error processing entry {line}: {str(e)}", "yellow"))
+                stats["has_errors"] = True
+                continue
+                
+        # Basic sanity checks
+        if stats["total_files"] == 0:
+            print(color_text("❌ No valid files found", "red"))
+            stats["has_errors"] = True
+            
+        stats["total_size_mb"] = stats["total_size"] / (1024 * 1024)
+        
+        return stats
+        
+    except Exception as e:
+        print(color_text(f"❌ Content analysis error: {str(e)}", "red"))
+        stats["has_errors"] = True
+        return stats
+
+
+
+
+
+
+
+
+
+def generate_detailed_validation_report(validation_results, pak_path):
+    """Version 2.0 - Generates detailed validation report with proper path handling"""
+    report_path = Path(__file__).parent / "validation_report.txt"
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    try:
+        with open(report_path, "w", encoding='utf-8') as f:
+            f.write(f"PAK Validation Report - {timestamp}\n")
+            f.write("="* 50 + "\n\n")
+            
+            # Basic Information
+            f.write("PAK Information:\n")
+            f.write(f"File: {str(pak_path)}\n")
+            f.write(f"Size: {pak_path.stat().st_size / (1024*1024):.2f} MB\n\n")
+            
+            # Validation Results
+            f.write("Validation Results:\n")
+            f.write("-"* 20 + "\n")
+            for check, result in validation_results.items():
+                if check != "errors":
+                    f.write(f"{check}: {'✓' if result else '❌'}\n")
+            
+            # Error List
+            if validation_results.get("errors"):
+                f.write("\nErrors Found:\n")
+                f.write("-"* 20 + "\n")
+                for i, error in enumerate(validation_results["errors"], 1):
+                    f.write(f"{i}. {str(error)}\n")
+            else:
+                f.write("\nNo errors found during validation.\n")
+                
+        print(color_text(f"\nDetailed validation report saved to: {str(report_path)}", "cyan"))
+        
+    except Exception as e:
+        print(color_text(f"Failed to save validation report: {str(e)}", "red"))
+
+
+
+
 
 
 
@@ -965,20 +1642,19 @@ def generate_validation_report(validation_report, validation_errors):
                 f.write("ERRORS:\n")
                 f.write("-"* 20 + "\n")
                 for error in validation_errors:
-                    # Keep full paths in the report file
-                    f.write(f"ERROR: {error}\n")
+                    f.write(f"ERROR: {str(error)}\n")
                 f.write("\n")
 
             f.write("SUCCESSFUL VALIDATIONS:\n")
             f.write("-"* 20 + "\n")
             for entry in validation_report:
-                # Keep full paths in the report file
-                f.write(f"{entry}\n")
+                f.write(f"{str(entry)}\n")
 
         # Use shortened path for console output
         print(color_text(f"Validation report saved to {shorten_path(report_path)}", "cyan"))
     except Exception as e:
-        print(color_text(f"Failed to save validation report: {e}", "red"))
+        print(color_text(f"Failed to save validation report: {str(e)}", "red"))
+
 
 
 
@@ -1079,38 +1755,585 @@ def log_corrupt_pak(pak_file, error_message):
 
 
 def validate_pak_file(pak_file):
-    """Version 1.1 - Improved PAK validation without using unsupported test flag
-    Returns: (is_valid, error_message)"""
+    """Version 3.1 - Enhanced basic validation with clear logging
+    
+    Args:
+        pak_file (str/Path): Path to PAK file to validate
+    
+    Returns:
+        tuple: (is_valid, error_message)
+    """
+    validation_results = {
+        "file_check": False,
+        "header_check": False,
+        "structure_check": False,
+        "content_check": False,
+        "errors": []
+    }
+    
     try:
-        # Check if file exists and has size
-        if not os.path.exists(pak_file):
-            return False, "PAK file does not exist"
-        if os.path.getsize(pak_file) == 0:
-            return False, "PAK file is empty"
+        print(color_text("\nStarting PAK validation...", "cyan"))
+        pak_path = Path(pak_file)
+        
+        # Step 1: Basic file validation
+        print(color_text("→ Performing basic file validation...", "cyan"))
+        basic_result = validate_pak_basics(pak_path, validation_results)
+        if not basic_result["success"]:
+            print(color_text(f"❌ Basic validation failed: {basic_result['error']}", "red"))
+            return False, basic_result["error"]
+        print(color_text("✓ Basic validation passed", "green"))
+            
+        # Step 2: Header validation
+        print(color_text("→ Validating PAK header...", "cyan"))
+        header_result = validate_pak_header(pak_path, validation_results)
+        if not header_result["success"]:
+            print(color_text(f"❌ Header validation failed: {header_result['error']}", "red"))
+            return False, header_result["error"]
+        print(color_text("✓ Header validation passed", "green"))
+            
+        # Step 3: Structure validation
+        print(color_text("→ Validating PAK structure...", "cyan"))
+        structure_result = validate_pak_structure_integrity(pak_path, validation_results)
+        if not structure_result["success"]:
+            print(color_text(f"❌ Structure validation failed: {structure_result['error']}", "red"))
+            return False, structure_result["error"]
+        print(color_text("✓ Structure validation passed", "green"))
+            
+        # Step 4: Content validation
+        print(color_text("→ Validating PAK contents...", "cyan"))
+        content_result = validate_pak_content_integrity(pak_path, validation_results)
+        if not content_result["success"]:
+            print(color_text(f"❌ Content validation failed: {content_result['error']}", "red"))
+            return False, content_result["error"]
+        print(color_text("✓ Content validation passed", "green"))
+            
+        # Log successful validation
+        print(color_text("\n✓ All validation checks passed successfully", "green"))
+        return True, "PAK file is valid"
+        
+    except Exception as e:
+        error_msg = f"Validation failed with unexpected error: {str(e)}"
+        print(color_text(f"\n❌ {error_msg}", "red"))
+        validation_results["errors"].append(error_msg)
+        return False, error_msg
 
-        # Try to list contents using repak list command
-        result = subprocess.run(
-            [REPAK_PATH, "list", pak_file],
+
+
+
+
+
+# Helper functions for validate_pak_file
+
+
+
+
+
+
+def analyze_extracted_content(extract_dir, file_listing):
+    """Version 2.0 - Analyzes extracted PAK content with basic validation"""
+    stats = {
+        "total_files": 0,
+        "empty_files": 0,
+        "total_size": 0,
+        "error": None
+    }
+    
+    try:
+        print(color_text("→ Analyzing extracted content...", "cyan"))
+        extract_path = Path(extract_dir)
+        
+        if not extract_path.exists():
+            stats["error"] = "Extraction directory not found"
+            return stats
+            
+        processed_files = 0
+        for file_entry in file_listing:
+            file_entry = file_entry.strip()
+            if not file_entry:
+                continue
+                
+            file_path = extract_path / file_entry.replace('/', os.sep)
+            if file_path.exists() and file_path.is_file():
+                try:
+                    size = file_path.stat().st_size
+                    stats["total_files"] += 1
+                    stats["total_size"] += size
+                    
+                    if size == 0:
+                        stats["empty_files"] += 1
+                        print(color_text(f"⚠️ Empty file found: {file_entry}", "yellow"))
+                        
+                    processed_files += 1
+                    
+                except Exception as e:
+                    print(color_text(f"⚠️ Error processing {file_entry}: {str(e)}", "yellow"))
+                    
+            else:
+                print(color_text(f"⚠️ File not found in extraction: {file_entry}", "yellow"))
+                
+        print(color_text(f"→ Processed {processed_files} files", "cyan"))
+        return stats
+        
+    except Exception as e:
+        stats["error"] = f"Content analysis failed: {str(e)}"
+        return stats
+
+
+
+
+
+
+
+def validate_pak_content_integrity_new(pak_path, results):
+    """Version 1.0 - Validates PAK content integrity using extracted files"""
+    result = {
+        "success": False,
+        "error": None
+    }
+    
+    try:
+        # Use standard repak list command
+        content_result = subprocess.run(
+            [REPAK_PATH, "list", str(pak_path)],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True
+            text=True,
+            check=False
         )
-        if result.returncode != 0:
-            return False, f"Failed to list PAK contents: {result.stderr.strip()}"
-
-        # Verify we got some file listings
-        file_listings = result.stdout.strip()
-        if not file_listings:
-            return False, "PAK contains no files"
-
-        # Basic structure check - verify we got actual file entries
-        if not any(line.strip() for line in file_listings.splitlines()):
-            return False, "PAK structure appears invalid - no valid file entries found"
-
-        return True, "PAK file is valid"
-
+        
+        if content_result.returncode != 0:
+            result["error"] = f"Content validation failed: {content_result.stderr.strip()}"
+            results["errors"].append(result["error"])
+            return result
+            
+        # Extract and analyze files
+        extract_dir = pak_cache.extract_pak(pak_path)
+        if not extract_dir:
+            result["error"] = "Failed to extract PAK for validation"
+            results["errors"].append(result["error"])
+            return result
+            
+        # Analyze extracted files
+        file_listing = content_result.stdout.splitlines()
+        content_stats = analyze_extracted_content(extract_dir, file_listing)
+        
+        if content_stats["error"]:
+            result["error"] = content_stats["error"]
+            results["errors"].append(result["error"])
+            return result
+            
+        if content_stats["empty_files"] > 0:
+            results["errors"].append(f"Warning: Found {content_stats['empty_files']} empty files")
+            
+        if content_stats["total_files"] == 0:
+            result["error"] = "No valid files found in PAK"
+            results["errors"].append(result["error"])
+            return result
+            
+        results["content_check"] = True
+        result["success"] = True
+        return result
+        
     except Exception as e:
-        return False, f"Error validating PAK: {str(e)}"
+        result["error"] = f"Content integrity check failed: {str(e)}"
+        results["errors"].append(result["error"])
+        return result
+
+
+
+
+def validate_pak_basics(pak_path, results):
+    """Version 2.0 - Enhanced basic PAK validation checks"""
+    result = {
+        "success": False,
+        "error": None
+    }
+    
+    try:
+        # Check file existence
+        if not pak_path.exists():
+            result["error"] = f"PAK file not found: {pak_path}"
+            return result
+            
+        # Check if it's actually a file
+        if not pak_path.is_file():
+            result["error"] = f"Path exists but is not a file: {pak_path}"
+            return result
+            
+        # Check file size
+        file_size = pak_path.stat().st_size
+        if file_size == 0:
+            result["error"] = "PAK file is empty"
+            return result
+            
+        # Check minimum size (arbitrary minimum, adjust if needed)
+        if file_size < 100:  # 100 bytes as minimum
+            result["error"] = f"PAK file suspiciously small: {file_size} bytes"
+            return result
+            
+        # Check file extension
+        if pak_path.suffix.lower() != '.pak':
+            result["error"] = "File does not have .pak extension"
+            return result
+            
+        # Check file permissions
+        if not os.access(pak_path, os.R_OK):
+            result["error"] = "PAK file is not readable"
+            return result
+            
+        # All basic checks passed
+        results["file_check"] = True
+        result["success"] = True
+        return result
+        
+    except Exception as e:
+        result["error"] = f"Basic validation error: {str(e)}"
+        results["errors"].append(result["error"])
+        return result
+
+
+
+
+
+def validate_pak_header(pak_path, results):
+    """Version 2.0 - Enhanced PAK header validation"""
+    result = {
+        "success": False,
+        "error": None
+    }
+    
+    try:
+        # Try to read header bytes
+        with open(pak_path, 'rb') as f:
+            header_bytes = f.read(16)  # Read first 16 bytes
+            
+        if len(header_bytes) < 16:
+            result["error"] = f"Invalid header size: got {len(header_bytes)} bytes, expected 16"
+            return result
+            
+        # Use repak to verify version/format
+        verify_result = subprocess.run(
+            [REPAK_PATH, "info", str(pak_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False
+        )
+        
+        if verify_result.returncode != 0:
+            result["error"] = f"Invalid PAK format: {verify_result.stderr.strip()}"
+            return result
+            
+        # Header validation passed
+        results["header_check"] = True
+        result["success"] = True
+        return result
+        
+    except Exception as e:
+        result["error"] = f"Header validation error: {str(e)}"
+        results["errors"].append(result["error"])
+        return result
+
+
+
+
+
+
+
+def validate_pak_structure_integrity(pak_path, results):
+    """Version 2.1 - Enhanced PAK structure validation with basic checks"""
+    result = {
+        "success": False,
+        "error": None,
+        "file_count": 0
+    }
+    
+    try:
+        print(color_text("\n→ Checking PAK structure...", "cyan"))
+        
+        # Get file listing with basic error handling
+        structure_result = subprocess.run(
+            [REPAK_PATH, "list", str(pak_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False
+        )
+        
+        if structure_result.returncode != 0:
+            result["error"] = f"Structure check failed: {structure_result.stderr.strip()}"
+            print(color_text(f"❌ {result['error']}", "red"))
+            return result
+            
+        # Analyze file listing
+        file_listing = structure_result.stdout.strip().splitlines()
+        
+        if not file_listing:
+            result["error"] = "PAK contains no files"
+            print(color_text("❌ Empty PAK file", "red"))
+            return result
+            
+        # Basic structure validation
+        invalid_entries = []
+        valid_count = 0
+        
+        for entry in file_listing:
+            if not entry.strip():
+                continue
+                
+            # Basic path validation
+            if not is_valid_pak_entry(entry):
+                invalid_entries.append(entry)
+                continue
+                
+            valid_count += 1
+            
+        # Update results
+        result["file_count"] = valid_count
+        print(color_text(f"→ Found {valid_count} valid files", "cyan"))
+        
+        if invalid_entries:
+            print(color_text(f"⚠️ Found {len(invalid_entries)} invalid entries", "yellow"))
+            if len(invalid_entries) <= 3:  # Show first few invalid entries
+                for entry in invalid_entries:
+                    print(color_text(f"  → Invalid: {entry}", "yellow"))
+            else:
+                print(color_text(f"  → First 3 invalid entries:", "yellow"))
+                for entry in invalid_entries[:3]:
+                    print(color_text(f"  → Invalid: {entry}", "yellow"))
+                print(color_text(f"  → And {len(invalid_entries) - 3} more...", "yellow"))
+        
+        if valid_count == 0:
+            result["error"] = "No valid files found in PAK"
+            print(color_text("❌ No valid files found", "red"))
+            return result
+            
+        # Structure validation passed
+        results["structure_check"] = True
+        result["success"] = True
+        print(color_text("✓ Structure validation passed", "green"))
+        return result
+        
+    except Exception as e:
+        result["error"] = f"Structure validation error: {str(e)}"
+        print(color_text(f"❌ {result['error']}", "red"))
+        results["errors"].append(result["error"])
+        return result
+
+
+
+
+
+
+
+
+def validate_pak_content_integrity(pak_path, results):
+    """Version 2.1 - Enhanced content validation with improved error handling"""
+    result = {
+        "success": False,
+        "error": None
+    }
+    
+    try:
+        print(color_text("\n→ Validating content integrity...", "cyan"))
+        
+        # Try to get content listing
+        content_result = subprocess.run(
+            [REPAK_PATH, "list", str(pak_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False
+        )
+        
+        if content_result.returncode != 0:
+            result["error"] = f"Content listing failed: {content_result.stderr.strip()}"
+            print(color_text(f"❌ {result['error']}", "red"))
+            return result
+            
+        # Extract PAK for validation
+        print(color_text("→ Extracting PAK for validation...", "cyan"))
+        extract_dir = pak_cache.extract_pak(pak_path)
+        if not extract_dir:
+            result["error"] = "Failed to extract PAK for validation"
+            print(color_text(f"❌ {result['error']}", "red"))
+            return result
+            
+        # Analyze content listing
+        file_listing = content_result.stdout.splitlines()
+        content_stats = analyze_extracted_content(extract_dir, file_listing)
+        
+        if content_stats["error"]:
+            result["error"] = content_stats["error"]
+            print(color_text(f"❌ {result['error']}", "red"))
+            return result
+            
+        # Print content statistics
+        print(color_text("\nContent Statistics:", "cyan"))
+        print(color_text(f"→ Total files: {content_stats['total_files']}", "white"))
+        print(color_text(f"→ Total size: {content_stats['total_size'] / 1024 / 1024:.2f} MB", "white"))
+        
+        if content_stats["empty_files"] > 0:
+            print(color_text(f"⚠️ Found {content_stats['empty_files']} empty files", "yellow"))
+            
+        if content_stats["total_files"] == 0:
+            result["error"] = "No valid files found in extracted content"
+            print(color_text(f"❌ {result['error']}", "red"))
+            return result
+            
+        # Content validation passed
+        results["content_check"] = True
+        result["success"] = True
+        print(color_text("✓ Content validation passed", "green"))
+        return result
+        
+    except Exception as e:
+        result["error"] = f"Content integrity error: {str(e)}"
+        print(color_text(f"❌ {result['error']}", "red"))
+        results["errors"].append(result["error"])
+        return result
+
+
+
+
+
+
+
+def analyze_pak_content_listing(file_lines, extract_dir):
+    """Version 2.0 - Analyzes PAK content listing using extracted files"""
+    stats = {
+        "total_files": 0,
+        "empty_files": 0,
+        "suspicious_sizes": 0,
+        "total_size": 0,
+        "min_size": float('inf'),
+        "max_size": 0
+    }
+    
+    try:
+        for line in file_lines:
+            if not line.strip():
+                continue
+                
+            file_path = Path(extract_dir) / line.strip()
+            if file_path.exists():
+                size = file_path.stat().st_size
+                stats["total_files"] += 1
+                stats["total_size"] += size
+                
+                # Track size statistics
+                stats["min_size"] = min(stats["min_size"], size)
+                stats["max_size"] = max(stats["max_size"], size)
+                
+                # Check for anomalies
+                if size == 0:
+                    stats["empty_files"] += 1
+                elif size < 100:  # Suspiciously small files
+                    stats["suspicious_sizes"] += 1
+                    
+        if stats["total_files"] > 0:
+            stats["min_size"] = min(stats["min_size"], float('inf'))
+            
+        return stats
+        
+    except Exception:
+        return stats
+
+
+
+
+
+
+def is_valid_pak_entry(entry):
+    """Version 2.0 - Enhanced PAK entry validation"""
+    if not entry or not isinstance(entry, str):
+        return False
+        
+    try:
+        # Check for basic path validity
+        if not entry.strip():
+            return False
+            
+        # Check for invalid characters
+        invalid_chars = '<>:"|?*'
+        if any(char in entry for char in invalid_chars):
+            return False
+            
+        # Check path components
+        parts = entry.split('/')
+        if not all(part.strip() for part in parts):
+            return False
+            
+        # Check for reasonable path length (Windows MAX_PATH = 260)
+        if len(entry) > 260:
+            return False
+            
+        # Check for valid file name
+        filename = parts[-1] if parts else ""
+        if not filename or filename.startswith('.'):
+            return False
+            
+        return True
+        
+    except Exception:
+        return False
+
+
+
+
+
+def log_pak_validation(pak_path, results, success=True, error=None):
+    """Version 1.0 - Logs PAK validation results"""
+    log_file = Path(__file__).parent / "pak_validation.log"
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    try:
+        with open(log_file, "a", encoding='utf-8') as f:
+            f.write(f"\n{'='*50}\n")
+            f.write(f"Validation Time: {timestamp}\n")
+            f.write(f"PAK File: {pak_path}\n")
+            f.write(f"Status: {'Success' if success else 'Failed'}\n")
+            
+            if error:
+                f.write(f"Error: {error}\n")
+                
+            f.write("\nValidation Results:\n")
+            for check, result in results.items():
+                if check != "errors":
+                    f.write(f"- {check}: {'✓' if result else '❌'}\n")
+                    
+            if results["errors"]:
+                f.write("\nErrors Found:\n")
+                for i, err in enumerate(results["errors"], 1):
+                    f.write(f"{i}. {err}\n")
+                    
+            f.write(f"{'='*50}\n")
+            
+    except Exception as e:
+        print(color_text(f"Failed to write validation log: {e}", "red"))
+
+def get_pak_file_stats(pak_path):
+    """Version 1.0 - Gets detailed PAK file statistics"""
+    stats = {
+        "size": 0,
+        "last_modified": None,
+        "is_readable": False,
+        "is_writable": False,
+        "error": None
+    }
+    
+    try:
+        if pak_path.exists():
+            stats["size"] = pak_path.stat().st_size
+            stats["last_modified"] = datetime.fromtimestamp(pak_path.stat().st_mtime)
+            stats["is_readable"] = os.access(pak_path, os.R_OK)
+            stats["is_writable"] = os.access(pak_path, os.W_OK)
+    except Exception as e:
+        stats["error"] = str(e)
+        
+    return stats
+
+
 
 
 
@@ -1119,7 +2342,7 @@ def validate_pak_file(pak_file):
 
 
 def rename_conflicting_paks(conflicting_files):
-    """Version 1.2 - Improved feedback and organization"""
+    """Version 1.5 - Improved backup naming with merged PAK protection"""
     print(color_text("\nBacking up original PAK files...", "cyan"))
     
     renamed_files = set()
@@ -1132,7 +2355,8 @@ def rename_conflicting_paks(conflicting_files):
     for sources in conflicting_files.values():
         for _, pak_file in sources:
             pak_path = Path(pak_file)
-            if pak_path.exists() and pak_path not in renamed_files:
+            # Skip merged PAK from counting
+            if pak_path.exists() and not is_merged_pak(pak_path) and pak_path not in renamed_files:
                 total_paks += 1
 
     if total_paks == 0:
@@ -1146,28 +2370,62 @@ def rename_conflicting_paks(conflicting_files):
         for mod_name, pak_file in sources:
             pak_path = Path(pak_file)
             
-            # Skip if already processed
-            if pak_path in renamed_files:
+            # Skip if already processed or if it's the merged PAK
+            if pak_path in renamed_files or is_merged_pak(pak_path):
                 continue
 
-            backup_path = pak_path.with_suffix('.pakbackup')
-            
             try:
                 if not pak_path.exists():
                     print(color_text(f"⚠️ PAK not found, skipping: {shorten_path(pak_path)}", "yellow"))
                     skipped_count += 1
                     continue
                     
-                if backup_path.exists():
-                    print(color_text(f"⚠️ Backup already exists: {shorten_path(backup_path)}", "yellow"))
-                    skipped_count += 1
+                # Find available backup name with a safety limit
+                backup_number = ""
+                max_attempts = 100  # Prevent infinite loop
+                attempt = 0
+                
+                while attempt < max_attempts:
+                    backup_path = pak_path.with_suffix(f'.pakbackup{backup_number}')
+                    if not backup_path.exists():
+                        break
+                    # Increment backup number
+                    if backup_number == "":
+                        backup_number = "2"
+                    else:
+                        backup_number = str(int(backup_number) + 1)
+                    attempt += 1
+
+                if attempt >= max_attempts:
+                    error_msg = f"Failed to find available backup name after {max_attempts} attempts"
+                    print(color_text(f"❌ {error_msg}", "red"))
+                    error_count += 1
                     continue
 
+                # Verify source file is still accessible
+                if not os.access(pak_path, os.W_OK):
+                    error_msg = "Source PAK file is not writable"
+                    print(color_text(f"❌ {error_msg}", "red"))
+                    error_count += 1
+                    continue
+
+                # Perform the rename with verification
                 pak_path.rename(backup_path)
-                renamed_count += 1
-                renamed_files.add(pak_path)
-                print(color_text(f"✓ Backed up: {shorten_path(pak_path)} → {shorten_path(backup_path)}", "green"))
                 
+                # Verify the rename was successful
+                if backup_path.exists() and not pak_path.exists():
+                    renamed_count += 1
+                    renamed_files.add(pak_path)
+                    suffix = f" (backup #{backup_number})" if backup_number else ""
+                    print(color_text(f"✓ Backed up: {shorten_path(pak_path)} → {shorten_path(backup_path)}{suffix}", "green"))
+                else:
+                    error_msg = "Rename operation failed verification"
+                    print(color_text(f"❌ {error_msg}", "red"))
+                    error_count += 1
+                
+            except PermissionError as pe:
+                error_count += 1
+                print(color_text(f"❌ Permission denied backing up {shorten_path(pak_path)}: {str(pe)}", "red"))
             except Exception as e:
                 error_count += 1
                 print(color_text(f"❌ Error backing up {shorten_path(pak_path)}: {str(e)}", "red"))
@@ -1179,6 +2437,12 @@ def rename_conflicting_paks(conflicting_files):
         print(color_text(f"⚠️ Skipped: {skipped_count} PAKs", "yellow"))
     if error_count > 0:
         print(color_text(f"❌ Errors encountered: {error_count} PAKs", "red"))
+        
+    # Warn if any backups were skipped
+    if skipped_count + error_count > 0:
+        print(color_text("\n⚠️ Warning: Some PAK files may still be accessible by the game!", "yellow"))
+
+
 
 
 
@@ -1234,34 +2498,149 @@ def compare_prompts(conflicting_files, use_base, compare_app):
 
 
 def compare_files(conflicting_files):
-    """Version 2.2 - Improved user guidance and feedback"""
+    """Version 2.4 - Enhanced file comparison and merging with improved error handling, removed size command dependency
+    
+    Args:
+        conflicting_files (dict): Dictionary of files with conflicts and their sources
+    """
     total_conflicts = len(conflicting_files)
-    print(color_text(f"\nPreparing to merge {total_conflicts} conflicting files...", "cyan"))
-
-    merge_folder = TEMP_MERGE_DIR
-    merge_folder.mkdir(parents=True, exist_ok=True)
-
     processed_count = 0
-    for file, sources in conflicting_files.items():
-        processed_count += 1
-        print(color_text(f"\n[Processing {processed_count} of {total_conflicts}] File: {file}", "magenta"))
+    failed_merges = []
+    successful_merges = []
+    
+    print(color_text(f"\nPreparing to merge {total_conflicts} conflicting files...", "cyan"))
+    
+    try:
+        # Create and validate merge workspace
+        merge_folder = prepare_merge_workspace(TEMP_MERGE_DIR)
+        if not merge_folder:
+            raise RuntimeError("Failed to prepare merge workspace")
 
+        # Process each conflicting file
+        for file, sources in conflicting_files.items():
+            processed_count += 1
+            print(color_text(f"\n[Processing {processed_count} of {total_conflicts}]", "magenta"))
+            print(color_text(f"File: {file}", "white"))
+            
+            try:
+                # Setup merge environment for this file
+                merge_result = setup_file_merge(file, sources, merge_folder)
+                if not merge_result["success"]:
+                    raise ValueError(merge_result["error"])
+                
+                file_merge_path = merge_result["merge_path"]
+                merged_file_name = f"final_merged_{Path(file).name}"
+                merged_file_path = file_merge_path.parent / merged_file_name
+                
+                # Check if already merged
+                if merged_file_path.exists():
+                    print(color_text(f"✓ Final merged file already exists.", "green"))
+                    if validate_merged_file(merged_file_path):
+                        copy_to_repack(merged_file_path, file)
+                        successful_merges.append(file)
+                        continue
+                    else:
+                        print(color_text("⚠️ Existing merge file appears invalid. Remerging...", "yellow"))
+                
+                # Copy and validate source files
+                files_copied = copy_source_files(sources, file, file_merge_path.parent)
+                if not files_copied["success"]:
+                    raise ValueError(f"Failed to copy source files: {files_copied['error']}")
+                
+                # Display merge instructions
+                display_merge_instructions(file_merge_path.parent, merged_file_name)
+                
+                # Wait for user to complete merge
+                print(color_text("\nStarting WinMerge...", "cyan"))
+                launch_winmerge(file_merge_path.parent)
+                
+                # Wait for merge completion
+                merge_complete = wait_for_merge_completion(merged_file_path)
+                if not merge_complete["success"]:
+                    raise ValueError(merge_complete["error"])
+                
+                # Validate merged result using new validation method
+                if validate_merged_file(merged_file_path):
+                    # Copy to repack directory
+                    copy_to_repack(merged_file_path, file)
+                    successful_merges.append(file)
+                    print(color_text(f"✓ Successfully merged: {file}", "green"))
+                else:
+                    raise ValueError("Merged file validation failed")
+                
+            except Exception as e:
+                error_context = {
+                    "file": file,
+                    "sources": [s[0] for s in sources],
+                    "error": str(e)
+                }
+                failed_merges.append(error_context)
+                print(color_text(f"\n❌ Merge failed for {file}: {str(e)}", "red"))
+                
+                if not yes_or_no("Would you like to continue with remaining files?"):
+                    raise RuntimeError("Merge process cancelled by user")
+        
+        # Final summary
+        print_merge_summary(successful_merges, failed_merges, total_conflicts)
+        
+    except Exception as e:
+        error_context = {
+            "operation": "File Comparison",
+            "processed": f"{processed_count}/{total_conflicts}",
+            "error": str(e),
+            "impact": "Merge process interrupted",
+            "solution": "Check error details and retry failed files"
+        }
+        log_error_context(error_context)
+        raise RuntimeError(f"Compare files operation failed: {str(e)}")
+
+
+
+
+
+
+
+
+
+# Helper functions for compare_files
+
+def prepare_merge_workspace(merge_dir):
+    """Version 1.0 - Prepares and validates merge workspace"""
+    try:
+        merge_dir.mkdir(parents=True, exist_ok=True)
+        return merge_dir if merge_dir.exists() else None
+    except Exception as e:
+        print(color_text(f"Failed to prepare merge workspace: {e}", "red"))
+        return None
+
+def setup_file_merge(file, sources, merge_folder):
+    """Version 1.0 - Sets up environment for merging a specific file"""
+    result = {
+        "success": False,
+        "error": None,
+        "merge_path": None
+    }
+    
+    try:
         file_merge_path = merge_folder / file.replace('/', os.sep)
         file_merge_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        result["success"] = True
+        result["merge_path"] = file_merge_path
+        return result
+    except Exception as e:
+        result["error"] = f"Failed to setup merge environment: {str(e)}"
+        return result
 
-        merged_file_name = f"final_merged_{Path(file).name}"
-        merged_file_path = file_merge_path.parent / merged_file_name
-
-        if merged_file_path.exists():
-            print(color_text(f"✓ Final merged file already exists for {file}. Skipping merge.", "green"))
-            destination_path = TEMP_REPACK_DIR / file.replace('/', os.sep)
-            destination_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(merged_file_path, destination_path)
-            print(color_text(f"✓ Copied existing merged file to {shorten_path(destination_path)}", "green"))
-            continue
-
-        # Copy files from cache with improved feedback
-        files_copied = 0
+def copy_source_files(sources, file, merge_dir):
+    """Version 1.0 - Copies source files to merge directory"""
+    result = {
+        "success": False,
+        "error": None,
+        "copied_files": []
+    }
+    
+    try:
         for source in sources:
             mod_name = source[0]
             pak_file = source[1]
@@ -1269,44 +2648,255 @@ def compare_files(conflicting_files):
             source_file_path = pak_cache.get_extracted_path(pak_file, file)
             if source_file_path and source_file_path.exists():
                 dest_file_name = f"{mod_name}_{Path(file).name}"
-                dest_file_path = file_merge_path.parent / dest_file_name
+                dest_file_path = merge_dir / dest_file_name
                 shutil.copy2(source_file_path, dest_file_path)
-                files_copied += 1
-                print(color_text(f"✓ Copied {shorten_path(source_file_path)} to merge folder", "green"))
+                result["copied_files"].append(dest_file_path)
+                print(color_text(f"✓ Copied {dest_file_name}", "green"))
             else:
-                print(color_text(f"⚠️ File {file} not found in cache for {mod_name}.", "red"))
+                result["error"] = f"Source file not found in cache for {mod_name}"
+                return result
+        
+        result["success"] = True
+        return result
+    except Exception as e:
+        result["error"] = str(e)
+        return result
 
-        if files_copied == 0:
-            print(color_text(f"❌ Failed to copy any files for {file}. Skipping.", "red"))
-            continue
+def display_merge_instructions(merge_dir, output_filename):
+    """Version 1.0 - Displays clear merge instructions"""
+    print(color_text(f"# Script Version {SCRIPT_VERSION}\n", "cyan")) 
+    print(color_text("\nMerge Instructions:", "cyan"))
+    print(color_text("1. Open WinMerge", "white"))
+    print(color_text("2. Use File -> Open to select files", "white"))
+    print(color_text("3. Compare and merge the changes you want to keep", "white"))
+    print(color_text(f"4. Save final result as '{output_filename}'", "white"))
+    print(color_text(f"5. Save in this folder: {shorten_path(merge_dir)}", "white"))
 
-        print(color_text("\nMerge Instructions:", "cyan"))
-        print(color_text("Files are ready in merge folder:", "yellow"))
-        print(color_text(f"{merge_folder}", "yellow"))
-        print(color_text("\nStep-by-step merge process:", "cyan"))
-        print(color_text("1. Open WinMerge", "white"))
-        print(color_text("2. Use File -> Open to select files", "white"))
-        print(color_text("3. Compare and merge the changes you want to keep", "white"))
-        print(color_text(f"4. Save final result as '{merged_file_name}'", "white"))
-        print(color_text("5. Ensure you save in the correct subfolder", "white"))
 
-        print(color_text("\nStarting WinMerge...", "cyan"))
-        input(color_text("Press Enter when you have completed the merge...", "cyan"))
 
+
+
+def validate_existing_merge(merged_file_path):
+    """Version 2.0 - Validates existing merged file with basic checks"""
+    try:
+        print(color_text(f"\n→ Checking existing merged file...", "cyan"))
+        
+        if not merged_file_path.exists():
+            print(color_text("❌ Merged file not found", "red"))
+            return False
+            
+        # Basic size check
+        file_size = merged_file_path.stat().st_size
+        if file_size == 0:
+            print(color_text("❌ Existing merged file is empty", "red"))
+            return False
+            
+        # Try reading the file
+        try:
+            with open(merged_file_path, 'rb') as f:
+                # Read start and end to verify integrity
+                f.seek(0)
+                start = f.read(1024)
+                f.seek(-min(1024, file_size), 2)
+                end = f.read(1024)
+                
+                if not start or not end:
+                    print(color_text("❌ File appears corrupted", "red"))
+                    return False
+                    
+        except Exception as e:
+            print(color_text(f"❌ Error reading file: {e}", "red"))
+            return False
+            
+        print(color_text("✓ Existing merge appears valid", "green"))
+        return True
+        
+    except Exception as e:
+        print(color_text(f"❌ Validation failed: {e}", "red"))
+        return False
+
+
+
+
+
+
+def wait_for_merge_completion(merged_file_path):
+    """Version 1.0 - Waits for and validates merge completion"""
+    result = {
+        "success": False,
+        "error": None
+    }
+    
+    
+    max_wait_time = 3600  # 1 hour maximum wait
+    check_interval = 6    # Check every x seconds
+    elapsed_time = 0
+    
+    while elapsed_time < max_wait_time:
         if merged_file_path.exists():
-            destination_path = TEMP_REPACK_DIR / file.replace('/', os.sep)
-            destination_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(merged_file_path, destination_path)
-            print(color_text(f"✓ Successfully merged and saved: {shorten_path(destination_path)}", "green"))
+            if validate_existing_merge(merged_file_path):
+                result["success"] = True
+                return result
+            else:
+                result["error"] = "Merged file exists but appears invalid"
+                return result
+                
+        print(color_text("→ Waiting for merge completion...", "cyan"))
+        time.sleep(check_interval)
+        elapsed_time += check_interval
+        
+        if elapsed_time % 60 == 0:  # Every minute
+            print(color_text(f"⚠️ Still waiting for merge... ({elapsed_time//60} minutes)", "yellow"))
+    
+    result["error"] = "Merge timeout exceeded"
+    return result
+
+
+
+
+
+
+
+def validate_merged_result(merged_file_path):
+    """Version 2.1 - Complete merged result validation with detailed checks"""
+    try:
+        print(color_text(f"\n→ Validating merged result: {merged_file_path.name}", "cyan"))
+        validation_steps = {
+            "file_check": False,
+            "size_check": False,
+            "read_check": False,
+            "content_check": False
+        }
+        
+        # Step 1: Basic file check
+        if not merged_file_path.exists():
+            print(color_text("❌ Merged file does not exist", "red"))
+            return False
+        validation_steps["file_check"] = True
+        
+        # Step 2: Size validation
+        try:
+            file_size = merged_file_path.stat().st_size
+            if file_size == 0:
+                print(color_text("❌ Merged file is empty", "red"))
+                return False
+            if file_size < 100:  # Arbitrary minimum size
+                print(color_text(f"⚠️ Warning: File suspiciously small ({file_size} bytes)", "yellow"))
+            print(color_text(f"→ File size: {file_size/1024:.1f} KB", "cyan"))
+            validation_steps["size_check"] = True
+            
+        except Exception as e:
+            print(color_text(f"❌ Size check failed: {e}", "red"))
+            return False
+            
+        # Step 3: Read validation
+        try:
+            with open(merged_file_path, 'rb') as f:
+                # Check start of file
+                start = f.read(1024)
+                if not start:
+                    print(color_text("❌ Cannot read file start", "red"))
+                    return False
+                    
+                # Check end of file
+                f.seek(-min(1024, file_size), 2)
+                end = f.read()
+                if not end:
+                    print(color_text("❌ Cannot read file end", "red"))
+                    return False
+                    
+            validation_steps["read_check"] = True
+            
+        except Exception as e:
+            print(color_text(f"❌ Read check failed: {e}", "red"))
+            return False
+            
+        # Step 4: Content type validation
+        try:
+            extension = merged_file_path.suffix.lower()
+            
+            # Text file validation
+            if extension in ['.cfg', '.txt', '.json']:
+                try:
+                    with open(merged_file_path, 'r', encoding='utf-8') as f:
+                        # Check first few lines
+                        lines = [f.readline() for _ in range(5)]
+                        if not any(lines):
+                            print(color_text("⚠️ Warning: Empty text file", "yellow"))
+                        elif not all(line.isprintable() for line in lines if line):
+                            print(color_text("⚠️ Warning: Contains non-printable characters", "yellow"))
+                except UnicodeDecodeError:
+                    print(color_text("⚠️ Warning: Not a valid text file", "yellow"))
+                except Exception as e:
+                    print(color_text(f"⚠️ Warning: Text validation error: {e}", "yellow"))
+                    
+            validation_steps["content_check"] = True
+            
+        except Exception as e:
+            print(color_text(f"⚠️ Content check warning: {e}", "yellow"))
+            
+        # Final validation summary
+        print(color_text("\nValidation Summary:", "cyan"))
+        for step, passed in validation_steps.items():
+            status = "✓" if passed else "❌"
+            color = "green" if passed else "red"
+            print(color_text(f"{status} {step.replace('_', ' ').title()}", color))
+            
+        if all(validation_steps.values()):
+            print(color_text("\n✓ Merged result validation passed", "green"))
+            return True
         else:
-            print(color_text(f"❌ No merged file named '{merged_file_name}' found.", "red"))
-            print(color_text("Please ensure you saved the merged file with the correct name.", "red"))
-            input(color_text("Press Enter to retry this file or Ctrl+C to exit...", "cyan"))
-            return compare_files({file: conflicting_files[file]})
+            print(color_text("\n❌ Merged result validation failed", "red"))
+            return False
+            
+    except Exception as e:
+        print(color_text(f"\n❌ Validation failed with error: {e}", "red"))
+        return False
 
-    print(color_text(f"\n✓ Successfully processed all {total_conflicts} conflicting files.", "green"))
 
 
+
+def copy_to_repack(merged_file_path, original_file):
+    """Version 1.0 - Copies merged file to repack directory"""
+    try:
+        destination_path = TEMP_REPACK_DIR / original_file.replace('/', os.sep)
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(merged_file_path, destination_path)
+        return True
+    except Exception as e:
+        print(color_text(f"❌ Failed to copy to repack directory: {e}", "red"))
+        return False
+
+def launch_winmerge(merge_dir):
+    """Version 1.0 - Launches WinMerge for file comparison"""
+    try:
+        files = sorted(list(merge_dir.glob('*')))
+        if len(files) > 3:
+            print(color_text("⚠️ More than 3 files detected. Please merge files manually.", "yellow"))
+        # WinMerge will be launched by user as per instructions
+        return True
+    except Exception as e:
+        print(color_text(f"❌ Failed to prepare WinMerge launch: {e}", "red"))
+        return False
+
+def print_merge_summary(successful_merges, failed_merges, total_conflicts):
+    """Version 1.0 - Prints detailed merge operation summary"""
+    print(color_text("\nMerge Operations Summary:", "magenta"))
+    print(color_text(f"Total conflicts: {total_conflicts}", "white"))
+    print(color_text(f"Successfully merged: {len(successful_merges)}", "green"))
+    print(color_text(f"Failed merges: {len(failed_merges)}", "red" if failed_merges else "green"))
+    
+    if successful_merges:
+        print(color_text("\nSuccessfully Merged Files:", "green"))
+        for file in successful_merges:
+            print(color_text(f"✓ {file}", "green"))
+    
+    if failed_merges:
+        print(color_text("\nFailed Merges:", "red"))
+        for fail in failed_merges:
+            print(color_text(f"❌ {fail['file']}", "red"))
+            print(color_text(f"   Error: {fail['error']}", "red"))
+            print(color_text(f"   Affected mods: {', '.join(fail['sources'])}", "yellow"))
 
 
 
@@ -1348,90 +2938,210 @@ def backup_file(file_path):
 
 
 def validate_merged_file(file_path):
-    """Version 1.1"""
-    if not file_path.exists() or file_path.stat().st_size == 0:
-        raise Exception(f"Merged file {file_path} is invalid or empty.")
-    # Additional validation checks can be added here
-    print(color_text(f"Validated merged file: {file_path}", "cyan"))
+    """Version 2.2 - Enhanced validation with smart file type handling"""
+    try:
+        print(color_text(f"\n→ Validating merged file: {Path(file_path).name}", "cyan"))
+        
+        # Basic existence check
+        if not file_path.exists():
+            print(color_text("❌ Merged file does not exist", "red"))
+            return False
+            
+        # Size validation
+        try:
+            file_size = file_path.stat().st_size
+            if file_size == 0:
+                print(color_text("❌ Merged file is empty", "red"))
+                return False
+            print(color_text(f"→ File size: {file_size/1024:.1f} KB", "cyan"))
+            
+        except Exception as e:
+            print(color_text(f"❌ Size check failed: {e}", "red"))
+            return False
+            
+        # Content validation based on file type
+        file_extension = file_path.suffix.lower()
+        
+        try:
+            with open(file_path, 'rb') as f:
+                # Check start of file
+                start = f.read(1024)
+                if not start:
+                    print(color_text("❌ Cannot read file start", "red"))
+                    return False
+                    
+                # For text-based files that aren't .cfg
+                if file_extension not in ['.cfg'] and file_extension in ['.txt', '.json']:
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as text_file:
+                            # Check first few lines
+                            lines = [text_file.readline() for _ in range(5)]
+                            if not any(lines):
+                                print(color_text("⚠️ Warning: Empty text file", "yellow"))
+                            elif not all(line.isprintable() for line in lines if line):
+                                print(color_text("⚠️ Warning: Contains non-printable characters", "yellow"))
+                    except UnicodeDecodeError:
+                        print(color_text("⚠️ Warning: Not a valid text file", "yellow"))
+                        
+        except Exception as e:
+            print(color_text(f"❌ Error reading file content: {e}", "red"))
+            return False
+            
+        print(color_text("✓ File validation passed", "green"))
+        return True
+        
+    except Exception as e:
+        print(color_text(f"❌ Validation failed: {e}", "red"))
+        return False
+
+
+
+def validate_merged_pak_for_inclusion(pak_path):
+    """Version 1.0 - Validates merged PAK before including in process"""
+    try:
+        print(color_text(f"\n→ Validating merged PAK: {shorten_path(pak_path)}", "cyan"))
+        
+        # Check if file exists and is readable
+        if not pak_path.exists():
+            return False, "PAK file not found"
+        
+        if not os.access(pak_path, os.R_OK):
+            return False, "PAK file is not readable"
+            
+        # Check file size
+        file_size = pak_path.stat().st_size
+        if file_size == 0:
+            return False, "PAK file is empty"
+            
+        # Try to read PAK structure
+        result = subprocess.run(
+            [REPAK_PATH, "list", str(pak_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False
+        )
+        
+        if result.returncode != 0:
+            return False, f"Invalid PAK structure: {result.stderr.strip()}"
+            
+        print(color_text("✓ Merged PAK validation passed", "green"))
+        return True, None
+        
+    except Exception as e:
+        return False, f"Validation error: {str(e)}"
 
 
 
 
 
 def main(pak_files):
-    """Version 2.1 - Improved user feedback and organization"""
+    """Version 2.3 - Enhanced sequence handling with improved merged PAK options"""
     print(color_text("\n# Python Merging for S2 HoC on nexusmods modified by nova", "cyan"))
     print(color_text("# credits to 63OR63 for original script", "cyan"))
     print(color_text("# https://www.nexusmods.com/stalker2heartofchornobyl/mods/413?tab=description", "cyan"))
     print(color_text(f"# Version {SCRIPT_VERSION}\n", "cyan")) 
 
-    # IMPORTANT: Clean all temp folders and cache before doing anything
-    print(color_text("\nEnsuring clean workspace...", "cyan"))
-    cleanup_temp_files()  
+    try:
+        # IMPORTANT: Clean all temp folders and cache before doing anything
+        print(color_text("\nEnsuring clean workspace...", "cyan"))
+        cleanup_temp_files()  
 
-    # Initialize cache and clean old temp files
-    global pak_cache
-    pak_cache = PakCache()
+        # Initialize cache and clean old temp files
+        global pak_cache
+        pak_cache = PakCache()
 
-    print(color_text("\nProcessing PAK files...", "cyan"))
-    pak_sources = process_pak_files(pak_files, pak_cache)
-    file_tree, file_count, file_sources, file_hashes = build_file_tree(pak_sources)
+        # Handle any existing merged PAK before processing with new options
+        merged_pak_result = handle_existing_merged_pak(MODS)
+        if not merged_pak_result["success"]:
+            if merged_pak_result.get("action") == "cancel":
+                print(color_text("\nOperation cancelled by user.", "yellow"))
+                input(color_text("\nPress Enter to close...", "cyan"))
+                sys.exit(0)
+            else:
+                print(color_text(f"❌ Failed to handle existing merged PAK: {merged_pak_result.get('error', 'Unknown error')}", "red"))
+                input(color_text("\nPress Enter to close...", "cyan"))
+                sys.exit(1)
 
-    print(color_text("\nAnalyzing file structure:", "magenta"))
-    display_file_tree(file_tree, file_count=file_count)
+        # If user chose to include existing merged PAK, add it to pak_files
+        if merged_pak_result.get("action") == "include":
+            merged_pak_path = merged_pak_result["pak_path"]
+            print(color_text(f"→ Adding existing merged PAK to processing list...", "cyan"))
+            pak_files.append(str(merged_pak_path))
 
-    # Determine conflicts using cached hashes
-    conflicting_files = {}
-    non_conflicting = 0
-    for file, sources in file_sources.items():
-        hashes = file_hashes[file]
-        if len(set(hashes.values())) > 1:
-            conflicting_files[file] = sources
+        print(color_text("\nProcessing PAK files...", "cyan"))
+        pak_sources = process_pak_files(pak_files, pak_cache)
+        file_tree, file_count, file_sources, file_hashes = build_file_tree(pak_sources)
+
+        print(color_text("\nAnalyzing file structure:", "magenta"))
+        display_file_tree(file_tree, file_count=file_count)
+
+        # Determine conflicts using cached hashes
+        conflicting_files = {}
+        non_conflicting = 0
+        for file, sources in file_sources.items():
+            hashes = file_hashes[file]
+            if len(set(hashes.values())) > 1:
+                conflicting_files[file] = sources
+            else:
+                # Handle non-conflicting files using cache
+                source = sources[0]
+                mod_name = source[0]
+                pak_file = source[1]
+                source_file_path = pak_cache.get_extracted_path(pak_file, file)
+                if source_file_path and source_file_path.exists():
+                    destination_path = TEMP_REPACK_DIR / file.replace('/', os.sep)
+                    destination_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source_file_path, destination_path)
+                    non_conflicting += 1
+
+        if non_conflicting > 0:
+            print(color_text(f"\n✓ Processed {non_conflicting} non-conflicting files", "green"))
+
+        if not conflicting_files:
+            print(color_text("\n✓ No conflicts found - all files are compatible!", "green"))
+            print(color_text("\nRepacking files...", "white"))
+            if not repack_pak():
+                raise RuntimeError("Failed to create merged PAK")
+            input(color_text("\nPress Enter to close...", "cyan"))
+            sys.exit(0)
         else:
-            # Handle non-conflicting files using cache
-            source = sources[0]
-            mod_name = source[0]
-            pak_file = source[1]
-            source_file_path = pak_cache.get_extracted_path(pak_file, file)
-            if source_file_path and source_file_path.exists():
-                destination_path = TEMP_REPACK_DIR / file.replace('/', os.sep)
-                destination_path.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source_file_path, destination_path)
-                non_conflicting += 1
+            total_conflicts = len(conflicting_files)
+            print(color_text(f"\nFound {total_conflicts} conflicting files that need merging:", "yellow"))
+            display_conflicts(conflicting_files, file_hashes)
 
-    if non_conflicting > 0:
-        print(color_text(f"\n✓ Processed {non_conflicting} non-conflicting files", "green"))
+        if not winmerge_exists:
+            print(color_text("\n❌ WinMerge is required for merging but was not found.", "red"))
+            sys.exit(1)
 
-    if not conflicting_files:
-        print(color_text("\n✓ No conflicts found - all files are compatible!", "green"))
-        print(color_text("\nRepacking files...", "white"))
-        repack_pak()
+        print(color_text("\nStarting merge process...", "cyan"))
+        compare_files(conflicting_files)
+
+        print(color_text(f"\nRepacking merged files...", "white"))
+        if not repack_pak():
+            raise RuntimeError("Failed to create merged PAK")
+
+        print(color_text("\nBacking up original PAK files...", "cyan"))
+        rename_conflicting_paks(conflicting_files)
+        
+        print(color_text("\nCleaning up temporary files...", "cyan"))
+        cleanup_temp_files()
+
+        print(color_text("\n✓ All operations completed successfully!", "green"))
         input(color_text("\nPress Enter to close...", "cyan"))
         sys.exit(0)
-    else:
-        total_conflicts = len(conflicting_files)
-        print(color_text(f"\nFound {total_conflicts} conflicting files that need merging:", "yellow"))
-        display_conflicts(conflicting_files, file_hashes)
-
-    if not winmerge_exists:
-        print(color_text("\n❌ WinMerge is required for merging but was not found.", "red"))
+        
+    except Exception as e:
+        print(color_text(f"\n❌ An error occurred: {str(e)}", "red"))
+        print(color_text("\nCleaning up...", "yellow"))
+        try:
+            cleanup_temp_files()
+        except:
+            pass
+        input(color_text("\nPress Enter to close...", "cyan"))
         sys.exit(1)
 
-    print(color_text("\nStarting merge process...", "cyan"))
-    compare_files(conflicting_files)
 
-    print(color_text(f"\nRepacking merged files...", "white"))
-    repack_pak()
-
-    print(color_text("\nBacking up original PAK files...", "cyan"))
-    rename_conflicting_paks(conflicting_files)
-    
-    print(color_text("\nCleaning up temporary files...", "cyan"))
-    cleanup_temp_files()
-
-    print(color_text("\n✓ All operations completed successfully!", "green"))
-    input(color_text("\nPress Enter to close...", "cyan"))
-    sys.exit(0)
 
 
 
