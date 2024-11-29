@@ -10,6 +10,7 @@ A tool designed to help merge multiple STALKER 2 mods, resolving conflicts betwe
 ```
 Original concept created by 63OR63
 Heavily modified by nova
+--
 
 ## Key Features
 ```
@@ -95,9 +96,4 @@ For issues or questions, please post in the comments section. Include any releva
 ## Why
 ```
 I wanted a extended version of the original python script, and with more verification and validation of files.
-```
-
-
-
-Endorse if you find this tool useful!
 ```
