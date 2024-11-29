@@ -1,18 +1,18 @@
 # STALKER 2 Python Mod Merging Script
 #### (Original Credits to 63OR63)
 
-## Description
+# Description
 ```
 A tool designed to help merge multiple STALKER 2 mods, resolving conflicts between pak files automatically where possible and providing tools for manual merging where needed.
 ```
 
-## Credits
+# Credits
 ```
 Original concept created by 63OR63
 Heavily modified by nova
 --
 
-## Key Features
+# Key Features
 ```
 • Automatic display and detection of mod conflicts for each conflicting file (cfg file, etc).
 • Visual file tree display of all mod contents
@@ -23,14 +23,14 @@ Heavily modified by nova
 • Detailed logging and error handling
 ```
 
-## Requirements
+# Requirements
 ```
 • Python 3.x installed and added to system PATH
 • WinMerge installed (https://winmerge.org/) (installed in users local appdata folder but can be installed anywhere)
 • Repak CLI tool installed (GitHub: repak_cli-x86_64-pc-windows-msvc.msi)
 ```
 
-## Installation / Configuration (needed only if mods folder not found in common default locations)
+# Installation / Configuration (needed only if mods folder not found in common default locations)
 ```
     Download and extract the tool to a convenient location
     Open "1_Python_Merging_s2hoc.py" in a text editor
@@ -39,14 +39,14 @@ Heavily modified by nova
     Change the MODS path to match your STALKER 2 mods folder location
 ```
 
-## Usage
+# Usage
 ```
     1. Simply drag and drop your .pak files onto the bat file"
     2. The tool will automatically start processing the files
 
 ```
 
-## How It Works
+# How It Works
 ```
 1. The tool analyzes all provided pak files for conflicts
 2. Non-conflicting files are automatically merged
@@ -58,7 +58,7 @@ Heavily modified by nova
 5. A new merged pak file (ZZZZZZZ_Merged.pak) is created
 ```
 
-## Important Notes
+# Important Notes
 ```
 • Always backup your mods before merging
 • The tool creates temporary directories during the merge process
@@ -67,7 +67,7 @@ Heavily modified by nova
 • A validation report is generated after merging
 ```
 
-## Troubleshooting
+# Troubleshooting
 ```
 • If WinMerge isn't found, verify its installation path
 • Check the validation_report.txt for details about any merge issues
@@ -75,18 +75,18 @@ Heavily modified by nova
 • corrupt_paks.log will list any corrupted pak files encountered
 ```
 
-## Known Limitations
+# Known Limitations
 ```
 • Requires manual intervention for resolving complex conflicts
 • WinMerge must be installed for conflict resolution
 ```
 
-## Support
+# Support
 ```
 For issues or questions, please post in the comments section. Include any relevant error messages and the contents of validation_report.txt if applicable.
 ```
 
-## Why
+# Why
 ```
 I wanted a extended version of the original python script, and with more verification and validation of files.
 ```
