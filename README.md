@@ -1,4 +1,4 @@
-# STALKER 2 Mod Merging Script
+# STALKER 2 Python Mod Merging Script
 #### (Original Credits to 63OR63)
 
 ## Description
@@ -14,7 +14,7 @@ Heavily modified by nova
 
 ## Key Features
 ```
-• Automatic detection of mod conflicts
+• Automatic display and detection of mod conflicts for each conflicting file (cfg file, etc).
 • Visual file tree display of all mod contents
 • Automatic merging of non-conflicting files
 • Guided manual merging process for conflicting files using WinMerge
@@ -30,27 +30,20 @@ Heavily modified by nova
 • Repak CLI tool installed (GitHub: repak_cli-x86_64-pc-windows-msvc.msi)
 ```
 
-## Installation
+## Installation / Configuration (needed only if mods folder not found in common default locations)
 ```
-1. Download and extract the tool to a convenient location
-2. Open "1_Mod_Merging_Helper_v0.2.py" in a text editor
-3. Locate the following lines near the top:
-
-    MODS = r"E:\s2hoc\Stalker2\Content\Paks\~mods"
-    REPAK_PATH = r"C:\Program Files\repak_cli\repak.exe"  (sometimes also in the bin folder)
-
-4. Change the MODS path to match your STALKER 2 mods folder location
+    Download and extract the tool to a convenient location
+    Open "1_Python_Merging_s2hoc.py" in a text editor
+    Locate the following line near the top:
+    CUSTOM_MODS_PATH = r"E:\s2hoc\Stalker2\Content\Paks\~mods"
+    Change the MODS path to match your STALKER 2 mods folder location
 ```
 
 ## Usage
 ```
-Method 1 - Using Batch File (Recommended)
-    1. Simply drag and drop your .pak files onto "1bat.bat"
+    1. Simply drag and drop your .pak files onto the bat file"
     2. The tool will automatically start processing the files
 
-Method 2 - Using Python Script Directly
-    1. Open command prompt in the tool's directory
-    2. Run: python "1_Mod_Merging_Helper_v0.2.py" [pak files]
 ```
 
 ## How It Works
