@@ -11,13 +11,14 @@ Heavily modified by nova
 --
 
 ## Key Features
-• Automatic display and detection of mod conflicts for each conflicting file (cfg file, etc).
-• Visual file tree display of all mod contents
-• Automatic merging of non-conflicting files
-• Guided manual merging process for conflicting files using WinMerge
-• Automatic backup creation of original pak files (with *.pakbackup filename extension)
-• Validation of merged pak files
-• Detailed logging and error handling
+1. Automatic display and detection of mod conflicts for each conflicting file (cfg file, etc)
+2. Visual file tree display of all mod contents
+3. Automatic merging of non-conflicting files
+4. Guided manual merging process for conflicting files using WinMerge
+5. Automatic backup creation of original pak files (with *.pakbackup filename extension)
+6. Validation of merged pak files
+7. Detailed logging and error handling
+
 
 ## Requirements
 • Python 3.x installed and added to system PATH
