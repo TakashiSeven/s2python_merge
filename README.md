@@ -1,13 +1,10 @@
 # STALKER 2 Python Mod Merging Script
 
-## (Original Credits to 63OR63)
+## (Original Credits to 63OR63) 
 
 ## Description
 A tool designed to help merge multiple STALKER 2 mods, resolving conflicts between pak files automatically where possible and providing tools for manual merging where needed.
 
-## Credits
-Original concept created by 63OR63
-Heavily modified by nova
 --
 
 ## Key Features
