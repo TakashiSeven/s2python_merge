@@ -5,8 +5,6 @@
 ## Description
 A tool designed to help merge multiple STALKER 2 mods, resolving conflicts between pak files automatically where possible and providing tools for manual merging where needed.
 
---
-
 ## Key Features
 1. Automatic display and detection of mod conflicts for each conflicting file (cfg file, etc)
 2. Visual file tree display of all mod contents
