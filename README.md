@@ -55,13 +55,18 @@ differences, then use Alt + Up/Down to navigate through changes more
 quickly.
 
 
-## Installation / Configuration
-(needed only if mods folder not found in common default locations)
-    Download and extract the tool to a convenient location
-    Open "1_Python_Merging_s2hoc.py" in a text editor
-    Locate the following line near the top:
-    CUSTOM_MODS_PATH = r"E:\s2hoc\Stalker2\Content\Paks\~mods"
-    Change the MODS path to match your STALKER 2 mods folder location
+# Installation / Configuration
+*(needed only if mods folder not found in common default locations)*
+
+1. Download and extract the tool to a convenient location
+    
+2. Open "1_Python_Merging_s2hoc.py" in a text editor
+   Locate the following line near the top:
+   ```
+   CUSTOM_MODS_PATH = r"E:\s2hoc\Stalker2\Content\Paks\~mods"
+   ```
+   Change the MODS path to match your STALKER 2 mods folder location
+
 
 
 ## How It Works
