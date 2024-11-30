@@ -34,6 +34,31 @@ A tool designed to help merge multiple STALKER 2 mods, resolving conflicts betwe
     1. Simply drag and drop your .pak files onto the bat file"
     2. The tool will automatically start processing the files
 
+# WinMerge Tips & Tricks
+
+## Quick Guide for File Merging
+
+### Key Features
+1. **Automatic Difference Highlighting**
+   - Differences are automatically highlighted when comparing files
+
+2. **Navigate Differences**
+   - Use `Alt + ↑/↓` to jump between differences
+
+3. **Merge Changes**
+   - `Alt + ←` copies changes from left file to right file
+   - `Alt + →` copies changes from right file to left file
+   - **Important:** Always copy changes to the same target file for consistency
+
+4. **Focus Mode**
+   - Use `Ctrl + D` to show only differences in large files
+
+### 💡 Pro Tip
+When working with large files:
+1. Start by pressing `Ctrl + D` to display only differences
+2. Navigate through changes efficiently using `Alt + ↑/↓`
+
+
 ## How It Works
 1. The tool analyzes all provided pak files for conflicts
 2. Non-conflicting files are automatically merged
