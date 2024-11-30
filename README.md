@@ -46,9 +46,9 @@ A tool designed to help merge multiple STALKER 2 mods, resolving conflicts betwe
     Alt + Left arrow key copies changes from left file to the right file
     and
     Alt + Right arrow key copies changes from right file to the left file
-    make sure you copy all changes you want saved to the same cfg file each time
 
-4. Use Ctrl + D to focus only on differences when files are large
+4. make sure you copy all changes you want saved to the same cfg file each time
+5. Use Ctrl + D to focus only on differences when files are large
 
 **Pro Tip:** If you're comparing large files, start with Ctrl + D to show only
 differences, then use Alt + Up/Down to navigate through changes more
