@@ -80,16 +80,16 @@ quickly.
 5. A new merged pak file (ZZZZZZZ_Merged.pak) is created
 
 
-
 ## Troubleshooting
-• If WinMerge isn't found, verify its installation path
-• Check the validation_report.txt for details about any merge issues
-• If a merge fails, original .pakbackup files can be renamed back to .pak
-• corrupt_paks.log will list any corrupted pak files encountered
+1. If WinMerge isn't found, verify its installation path
+2. Check the validation_report.txt for details about any merge issues
+3. If a merge fails, original .pakbackup files can be renamed back to .pak
+4. corrupt_paks.log will list any corrupted pak files encountered
 
 ## Known Limitations
-• Requires manual intervention for resolving complex conflicts
-• WinMerge must be installed for conflict resolution
+1. Requires manual intervention for resolving complex conflicts
+2. WinMerge must be installed for conflict resolution
+
 
 ## Support
 For issues or questions, please post in the comments section. Include any relevant error messages and the contents of validation_report.txt if applicable.
