@@ -22,6 +22,39 @@ A tool designed to help merge multiple STALKER 2 mods, resolving conflicts betwe
 2. WinMerge installed (https://winmerge.org/) (installed in users local appdata folder but can be installed anywhere)
 3. Repak CLI tool installed GitHub link: https://github.com/trumank/repak/releases/download/v0.2.2/repak_cli-x86_64-pc-windows-msvc.msi
 
+
+# Usage
+
+1. Simply drag and drop your .pak files onto "1 drag & drop pak files onto this bat file.bat"
+2. The tool will automatically start processing the pak files
+
+## Notes
+
+1. Merged pak file is saved as "ZZZZZZZ_Merged.pak" in your mods folder
+2. Original pak files are automatically backed up with .pakbackup extension
+3. The tool creates temporary directories during the merge process
+4. A validation report is generated after merging
+
+
+
+# Winmerge Tips and Tricks for Merging Files
+1. When you open the cfg files to compare, differences are automatically highlighted
+
+2. Use Alt + Up/Down arrow keys on your keyboard to jump to each difference
+
+3. For each difference:
+    Alt + Left arrow key copies changes from left file to the right file
+    and
+    Alt + Right arrow key copies changes from right file to the left file
+    make sure you copy all changes you want saved to the same cfg file each time
+
+4. Use Ctrl + D to focus only on differences when files are large
+
+**Pro Tip:** If you're comparing large files, start with Ctrl + D to show only
+differences, then use Alt + Up/Down to navigate through changes more
+quickly.
+
+
 ## Installation / Configuration
 (needed only if mods folder not found in common default locations)
     Download and extract the tool to a convenient location
@@ -29,34 +62,6 @@ A tool designed to help merge multiple STALKER 2 mods, resolving conflicts betwe
     Locate the following line near the top:
     CUSTOM_MODS_PATH = r"E:\s2hoc\Stalker2\Content\Paks\~mods"
     Change the MODS path to match your STALKER 2 mods folder location
-
-## Usage
-    1. Simply drag and drop your .pak files onto the bat file"
-    2. The tool will automatically start processing the files
-
-# WinMerge Tips & Tricks
-
-## Quick Guide for File Merging
-
-### Key Features
-1. **Automatic Difference Highlighting**
-   - Differences are automatically highlighted when comparing files
-
-2. **Navigate Differences**
-   - Use `Alt + ↑/↓` to jump between differences
-
-3. **Merge Changes**
-   - `Alt + ←` copies changes from left file to right file
-   - `Alt + →` copies changes from right file to left file
-   - **Important:** Always copy changes to the same target file for consistency
-
-4. **Focus Mode**
-   - Use `Ctrl + D` to show only differences in large files
-
-### 💡 Pro Tip
-When working with large files:
-1. Start by pressing `Ctrl + D` to display only differences
-2. Navigate through changes efficiently using `Alt + ↑/↓`
 
 
 ## How It Works
@@ -69,12 +74,7 @@ When working with large files:
 4. Original conflicting pak files are renamed to .pakbackup after the merge process fully completes
 5. A new merged pak file (ZZZZZZZ_Merged.pak) is created
 
-## Important Notes
-• Always backup your mods before merging
-• The tool creates temporary directories during the merge process
-• Original pak files are automatically backed up with .pakbackup extension
-• Merged pak file is saved as "ZZZZZZZ_Merged.pak" in your mods folder
-• A validation report is generated after merging
+
 
 ## Troubleshooting
 • If WinMerge isn't found, verify its installation path
