@@ -18,9 +18,9 @@ A tool designed to help merge multiple STALKER 2 mods, resolving conflicts betwe
 
 
 ## Requirements
-• Python 3.x installed and added to system PATH
-• WinMerge installed (https://winmerge.org/) (installed in users local appdata folder but can be installed anywhere)
-• Repak CLI tool installed (GitHub: repak_cli-x86_64-pc-windows-msvc.msi)
+1. Python 3.x installed and added to system PATH
+2. WinMerge installed (https://winmerge.org/) (installed in users local appdata folder but can be installed anywhere)
+3. Repak CLI tool installed GitHub link: https://github.com/trumank/repak/releases/download/v0.2.2/repak_cli-x86_64-pc-windows-msvc.msi
 
 ## Installation / Configuration
 (needed only if mods folder not found in common default locations)
