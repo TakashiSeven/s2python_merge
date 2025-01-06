@@ -10,6 +10,7 @@ import hashlib
 
 
 
+
 # Python Merge on nexusmods modifed by nova
 
 # credits to 63OR63 for original script
@@ -22,7 +23,11 @@ CUSTOM_MODS_PATH = r"E:\s2hoc\Stalker2\Content\Paks\~mods"
 
 
 
-SCRIPT_VERSION = "2.3" 
+SCRIPT_VERSION = "2.4.1" 
+
+
+# Add with other globals at top
+VALIDATION_MESSAGES = []  # Buffer to store messages for report
 
 
 
@@ -62,6 +67,28 @@ VALIDATION_DIR = Path(__file__).parent / "temp_validation"  # New temp directory
 
 
 ######### Don't edit anything beneath this line! #########
+
+
+def log_for_report(message, message_type="info"):
+    """Version 1.0 - Logs message to both console and report buffer
+    Args:
+        message (str): Message to log
+        message_type (str): "info", "error", "success", "warning"
+    """
+    # Print to console with color
+    if message_type == "error":
+        print(color_text(message, "red"))
+    elif message_type == "success":
+        print(color_text(message, "green"))
+    elif message_type == "warning":
+        print(color_text(message, "yellow"))
+    else:
+        print(color_text(message, "cyan"))
+        
+    # Store for report
+    VALIDATION_MESSAGES.append((message_type, message))
+
+
 
 def shorten_path(path, marker="~mods"):
     """Version 1.0 - Shortens path display by removing everything before marker"""
@@ -509,10 +536,11 @@ def build_file_tree(pak_sources):
         files_with_conflicts = sum(1 for count in file_count.values() if count > 1)
         
         # Print summary
-        print(color_text("\nFile Analysis Summary:", "magenta"))
-        print(color_text(f"✓ Total entries processed: {processed}", "green"))
-        print(color_text(f"✓ Unique files found: {total_unique_files}", "green"))
-        print(color_text(f"→ Files with conflicts: {files_with_conflicts}", "yellow" if files_with_conflicts else "green"))
+        log_for_report("\nFile Analysis Summary:", "info")
+        log_for_report(f"✓ Total entries processed: {processed}", "success")
+        log_for_report(f"✓ Unique files found: {total_unique_files}", "success")
+        log_for_report(f"→ Files with conflicts: {files_with_conflicts}", "warning" if files_with_conflicts else "success")
+
         
         if errors:
             print(color_text(f"\nProcessing Errors ({len(errors)}):", "red"))
@@ -806,15 +834,44 @@ def process_pak_files(pak_files, pak_cache):
             log_error_context(error_context)
             failed_paks.append((pak_file, str(e)))
 
-    # Final summary
-    print(color_text("\nProcessing Summary:", "magenta"))
-    print(color_text(f"✓ Successfully processed: {processed_paks} of {total_paks} PAKs", "green"))
-    
+
+    # # Final summary
+    # log_for_report("\nProcessing Summary:", "info")
+    # log_for_report(f"✓ Successfully processed: {processed_paks} of {total_paks} PAKs", "success")
+
+    # if failed_paks:
+    #     log_for_report(f"\nFailed PAKs ({len(failed_paks)}):", "error")
+    #     for pak, error in failed_paks:
+    #         log_for_report(f"❌ {shorten_path(pak)}: {error}", "error")
+
+
+
+    # New version
+    log_for_report("\nProcessing Summary:", "info")
+    log_for_report(f"✓ Successfully processed: {processed_paks} of {total_paks} PAKs", "success")
+
     if failed_paks:
-        print(color_text(f"\nFailed PAKs ({len(failed_paks)}):", "red"))
+        # Show failures prominently
+        print("\nCRITICAL ERRORS FOUND:")
+        print("="*50)
+        print(f"Failed to process {len(failed_paks)} PAKs:")
         for pak, error in failed_paks:
-            print(color_text(f"❌ {shorten_path(pak)}: {error}", "red"))
-    
+            print(f"❌ {shorten_path(pak)}: {error}")
+        print("="*50)
+        
+        # Single prompt to continue
+        if not yes_or_no("\nContinue processing all files? (Additional errors will be shown in console and log file)"):
+            raise RuntimeError("Processing halted due to PAK failures")
+
+        # Still log failures for report
+        log_for_report(f"\nFailed PAKs ({len(failed_paks)}):", "error")
+        for pak, error in failed_paks:
+            log_for_report(f"❌ {shorten_path(pak)}: {error}", "error")
+
+
+
+
+
     if skipped_entries:
         print(color_text(f"\nSkipped Entries ({len(skipped_entries)}):", "yellow"))
         print(color_text("First 5 skipped entries:", "yellow"))
@@ -956,11 +1013,12 @@ def repack_pak():
         if not validation_results["success"]:
             raise ValueError(f"Pre-repack validation failed: {validation_results['error']}")
         
-        print(color_text("\nValidation Summary:", "magenta"))
-        print(color_text(f"✓ Available disk space: {validation_results['disk_space_gb']:.2f} GB", "green"))
-        print(color_text(f"✓ Files to pack: {validation_results['file_count']}", "green"))
-        print(color_text(f"✓ Total size: {validation_results['total_size_mb']:.2f} MB", "green"))
-        
+        # Print content statistics
+        log_for_report("\nValidation Summary:", "info")
+        log_for_report(f"✓ Available disk space: {validation_results['disk_space_gb']:.2f} GB", "success")
+        log_for_report(f"✓ Files to pack: {validation_results['file_count']}", "success")
+        log_for_report(f"✓ Total size: {validation_results['total_size_mb']:.2f} MB", "success")
+
         # Process files in repack directory
         print(color_text("\n→ Processing files for repack...", "cyan"))
         processed_files = process_repack_files(TEMP_REPACK_DIR)
@@ -1147,7 +1205,9 @@ def log_validation_status(step_name, passed, error=None):
 
 
 def cleanup_temp_files():
-    """Version 2.4 - Ensures complete cleanup of all cached data"""
+    """Version 2.4.1 - Ensures complete cleanup of all cached data and temporary files
+    
+    """
     print(color_text("\nCleaning all temporary files and cache...", "white"))
     
     # Clear any existing cache references first
@@ -1211,6 +1271,25 @@ def cleanup_temp_files():
                 sys.exit(1)  # Exit if we can't create clean directories
 
     print(color_text("\n✓ Workspace cleaned and ready", "green"))
+
+
+
+
+
+
+import atexit
+atexit.register(cleanup_temp_files)
+
+# Register cleanup handler for keyboard interrupts
+import signal
+
+def signal_handler(signum, frame):
+    """Version 1.0 - Handles cleanup on keyboard interrupt"""
+    print(color_text("\n\nInterrupt received, cleaning up...", "yellow"))
+    cleanup_temp_files()
+    sys.exit(1)
+
+signal.signal(signal.SIGINT, signal_handler)
 
 
 
@@ -1437,10 +1516,12 @@ def validate_pak_contents(pak_path, results):
         content_stats = analyze_pak_contents(file_listing)
         
         # Print detailed statistics
-        print(color_text("\nContent Statistics:", "cyan"))
-        print(color_text(f"→ Total files: {content_stats['total_files']}", "white"))
-        print(color_text(f"→ Total size: {content_stats['total_size_mb']:.2f} MB", "white"))
+        log_for_report("\nContent Statistics - ", "info")
+        log_for_report(f"→ Total files: {content_stats['total_files']}", "info")
         
+        # todo fixme later bug with MB showing 0.0 MB specifically here only
+        # log_for_report(f"→ Total size: {content_stats['total_size_mb']:.2f} MB", "info")
+
         if content_stats['empty_files'] > 0:
             print(color_text(f"⚠️ Found {content_stats['empty_files']} empty files", "yellow"))
             results["errors"].append(f"Found {content_stats['empty_files']} empty files")
@@ -1468,55 +1549,65 @@ def validate_pak_contents(pak_path, results):
 
 
 def analyze_pak_contents(file_listing):
-    """Version 2.1 - Basic content analysis with improved error checking"""
+    """Version 2.4 - Basic content analysis with proper size reporting and logging
+    Using existing PAK size and consistent log_for_report
+    """
     stats = {
         "total_files": 0,
         "empty_files": 0,
         "suspicious_files": 0,
         "total_size": 0,
-        "total_size_mb": 0,
+        "min_size": float('inf'),
+        "max_size": 0,
         "has_errors": False
     }
     
     try:
-        print(color_text("→ Analyzing PAK contents...", "cyan"))
+        log_for_report("→ Analyzing PAK contents...", "info")
         
-        for line in file_listing:
-            if not line.strip():
+        for entry in file_listing:
+            if not entry.strip():
                 continue
                 
             stats["total_files"] += 1
             
-            # Basic file entry validation
+            # Basic path validation
             try:
-                # Check if entry appears valid
-                if '/' in line:  # Has path separator
-                    parts = line.split('/')
+                if '/' in entry:  # Has path separator
+                    parts = entry.split('/')
                     if not all(part.strip() for part in parts):
-                        print(color_text(f"⚠️ Invalid path structure: {line}", "yellow"))
+                        log_for_report(f"⚠️ Invalid path structure: {entry}", "warning")
                         stats["has_errors"] = True
                         continue
                         
-                if len(line) > 260:  # Windows max path
-                    print(color_text(f"⚠️ Path too long: {line}", "yellow"))
+                if len(entry) > 260:  # Windows max path
+                    log_for_report(f"⚠️ Path too long: {entry}", "warning")
                     stats["has_errors"] = True
                     
             except Exception as e:
-                print(color_text(f"⚠️ Error processing entry {line}: {str(e)}", "yellow"))
+                log_for_report(f"⚠️ Error processing entry {entry}: {str(e)}", "warning")
                 stats["has_errors"] = True
                 continue
-                
-        # Basic sanity checks
-        if stats["total_files"] == 0:
-            print(color_text("❌ No valid files found", "red"))
-            stats["has_errors"] = True
-            
-        stats["total_size_mb"] = stats["total_size"] / (1024 * 1024)
         
+        # If we have files, use the PAK file size for total size
+        if stats["total_files"] > 0:
+            try:
+                # Get size from parent validation process
+                pak_size = Path(pak_path).stat().st_size if 'pak_path' in globals() else 0
+                stats["total_size"] = pak_size
+                stats["total_size_mb"] = pak_size / (1024 * 1024)
+            except Exception:
+                # Fallback if size calculation fails
+                stats["total_size_mb"] = 0
+                log_for_report("⚠️ Warning: Could not determine PAK size", "warning")
+                
+        if stats["total_files"] > 0:
+            stats["min_size"] = min(stats["min_size"], float('inf'))
+            
         return stats
         
     except Exception as e:
-        print(color_text(f"❌ Content analysis error: {str(e)}", "red"))
+        log_for_report(f"❌ Content analysis error: {e}", "error")
         stats["has_errors"] = True
         return stats
 
@@ -1629,31 +1720,48 @@ def compare_extracted_files(original_dir, validation_dir):
 
 
 def generate_validation_report(validation_report, validation_errors):
-    """Version 1.1 - Generates validation report with shortened paths"""
+    """Version 2.1 - Uses global message buffer for comprehensive reporting"""
     report_path = Path(__file__).parent / "validation_report.txt"
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
     try:
         with open(report_path, "w", encoding='utf-8') as f:
+            # Header
             f.write(f"Validation Report - {timestamp}\n")
             f.write("="* 50 + "\n\n")
             
+            # Write buffered messages
+            current_section = None
+            for msg_type, message in VALIDATION_MESSAGES:
+                # Start new section if message ends with "Summary:" or similar
+                if message.strip().endswith(":"):
+                    f.write(f"\n{message}\n")
+                    current_section = message
+                else:
+                    f.write(f"{message}\n")
+            
+            # Include any additional validation errors not caught in buffer
             if validation_errors:
-                f.write("ERRORS:\n")
+                f.write("\nADDITIONAL ERRORS:\n")
                 f.write("-"* 20 + "\n")
                 for error in validation_errors:
                     f.write(f"ERROR: {str(error)}\n")
                 f.write("\n")
+            
+            # Final status
+            if not validation_errors:
+                f.write("\n✓ All validation checks completed successfully\n")
+            else:
+                f.write(f"\n❌ Validation completed with {len(validation_errors)} errors\n")
 
-            f.write("SUCCESSFUL VALIDATIONS:\n")
-            f.write("-"* 20 + "\n")
-            for entry in validation_report:
-                f.write(f"{str(entry)}\n")
-
-        # Use shortened path for console output
+        # Clear the message buffer after writing report
+        VALIDATION_MESSAGES.clear()
+        
         print(color_text(f"Validation report saved to {shorten_path(report_path)}", "cyan"))
+        
     except Exception as e:
         print(color_text(f"Failed to save validation report: {str(e)}", "red"))
+
 
 
 
@@ -2041,7 +2149,14 @@ def validate_pak_header(pak_path, results):
 
 
 def validate_pak_structure_integrity(pak_path, results):
-    """Version 2.1 - Enhanced PAK structure validation with basic checks"""
+    """Version 2.2 - Enhanced PAK structure validation with comprehensive logging
+    Args:
+        pak_path (Path): Path to PAK file
+        results (dict): Results dictionary to update
+        
+    Returns:
+        dict: Result status and details
+    """
     result = {
         "success": False,
         "error": None,
@@ -2049,7 +2164,7 @@ def validate_pak_structure_integrity(pak_path, results):
     }
     
     try:
-        print(color_text("\n→ Checking PAK structure...", "cyan"))
+        log_for_report("\n→ Checking PAK structure...", "info")
         
         # Get file listing with basic error handling
         structure_result = subprocess.run(
@@ -2062,7 +2177,14 @@ def validate_pak_structure_integrity(pak_path, results):
         
         if structure_result.returncode != 0:
             result["error"] = f"Structure check failed: {structure_result.stderr.strip()}"
-            print(color_text(f"❌ {result['error']}", "red"))
+            log_for_report(f"❌ {result['error']}", "error")
+            
+            # Log detailed error context
+            log_for_report("\nError Details:", "error")
+            log_for_report("→ Operation: PAK Structure Validation", "warning")
+            log_for_report(f"→ File: {shorten_path(pak_path)}", "warning")
+            log_for_report(f"→ Error: {result['error']}", "warning")
+            log_for_report("→ Impact: PAK will be skipped", "warning")
             return result
             
         # Analyze file listing
@@ -2070,7 +2192,15 @@ def validate_pak_structure_integrity(pak_path, results):
         
         if not file_listing:
             result["error"] = "PAK contains no files"
-            print(color_text("❌ Empty PAK file", "red"))
+            log_for_report("❌ Empty PAK file", "error")
+            log_for_report(f"❌ Structure validation failed: {result['error']}", "error")
+            
+            # Log empty PAK error details
+            log_for_report("\nError Details:", "error")
+            log_for_report("→ Operation: PAK Validation", "warning")
+            log_for_report(f"→ File: {shorten_path(pak_path)}", "warning")
+            log_for_report("→ Error: PAK contains no files", "warning")
+            log_for_report("→ Impact: PAK will be skipped", "warning")
             return result
             
         # Basic structure validation
@@ -2088,35 +2218,50 @@ def validate_pak_structure_integrity(pak_path, results):
                 
             valid_count += 1
             
-        # Update results
+        # Update results and log findings
         result["file_count"] = valid_count
-        print(color_text(f"→ Found {valid_count} valid files", "cyan"))
+        log_for_report(f"→ Found {valid_count} valid files", "info")
         
         if invalid_entries:
-            print(color_text(f"⚠️ Found {len(invalid_entries)} invalid entries", "yellow"))
+            log_for_report(f"⚠️ Found {len(invalid_entries)} invalid entries", "warning")
             if len(invalid_entries) <= 3:  # Show first few invalid entries
                 for entry in invalid_entries:
-                    print(color_text(f"  → Invalid: {entry}", "yellow"))
+                    log_for_report(f"  → Invalid: {entry}", "warning")
             else:
-                print(color_text(f"  → First 3 invalid entries:", "yellow"))
+                log_for_report(f"  → First 3 invalid entries:", "warning")
                 for entry in invalid_entries[:3]:
-                    print(color_text(f"  → Invalid: {entry}", "yellow"))
-                print(color_text(f"  → And {len(invalid_entries) - 3} more...", "yellow"))
+                    log_for_report(f"  → Invalid: {entry}", "warning")
+                log_for_report(f"  → And {len(invalid_entries) - 3} more...", "warning")
         
         if valid_count == 0:
             result["error"] = "No valid files found in PAK"
-            print(color_text("❌ No valid files found", "red"))
+            log_for_report("❌ No valid files found", "error")
+            
+            # Log no valid files error details
+            log_for_report("\nError Details:", "error")
+            log_for_report("→ Operation: PAK Validation", "warning")
+            log_for_report(f"→ File: {shorten_path(pak_path)}", "warning")
+            log_for_report("→ Error: No valid files found", "warning")
+            log_for_report("→ Impact: PAK will be skipped", "warning")
             return result
             
         # Structure validation passed
         results["structure_check"] = True
         result["success"] = True
-        print(color_text("✓ Structure validation passed", "green"))
+        log_for_report("✓ Structure validation passed", "success")
         return result
         
     except Exception as e:
         result["error"] = f"Structure validation error: {str(e)}"
-        print(color_text(f"❌ {result['error']}", "red"))
+        log_for_report(f"❌ {result['error']}", "error")
+        
+        # Log exception error details
+        log_for_report("\nError Details:", "error")
+        log_for_report("→ Operation: PAK Structure Validation", "warning")
+        log_for_report(f"→ File: {shorten_path(pak_path)}", "warning")
+        log_for_report(f"→ Error: {str(e)}", "warning")
+        log_for_report("→ Impact: PAK will be skipped", "warning")
+        
         results["errors"].append(result["error"])
         return result
 
@@ -2127,15 +2272,16 @@ def validate_pak_structure_integrity(pak_path, results):
 
 
 
+
 def validate_pak_content_integrity(pak_path, results):
-    """Version 2.1 - Enhanced content validation with improved error handling"""
+    """Version 2.2 - Enhanced content validation with fixed size reporting and logging"""
     result = {
         "success": False,
         "error": None
     }
     
     try:
-        print(color_text("\n→ Validating content integrity...", "cyan"))
+        log_for_report("\n→ Validating content integrity...", "info")
         
         # Try to get content listing
         content_result = subprocess.run(
@@ -2148,16 +2294,20 @@ def validate_pak_content_integrity(pak_path, results):
         
         if content_result.returncode != 0:
             result["error"] = f"Content listing failed: {content_result.stderr.strip()}"
-            print(color_text(f"❌ {result['error']}", "red"))
+            log_for_report(f"❌ {result['error']}", "error")
             return result
             
         # Extract PAK for validation
-        print(color_text("→ Extracting PAK for validation...", "cyan"))
+        log_for_report("→ Extracting PAK for validation...", "info")
         extract_dir = pak_cache.extract_pak(pak_path)
         if not extract_dir:
             result["error"] = "Failed to extract PAK for validation"
-            print(color_text(f"❌ {result['error']}", "red"))
+            log_for_report(f"❌ {result['error']}", "error")
             return result
+            
+        # Get PAK size for accurate reporting
+        pak_size = pak_path.stat().st_size
+        size_mb = pak_size / (1024 * 1024)
             
         # Analyze content listing
         file_listing = content_result.stdout.splitlines()
@@ -2165,31 +2315,31 @@ def validate_pak_content_integrity(pak_path, results):
         
         if content_stats["error"]:
             result["error"] = content_stats["error"]
-            print(color_text(f"❌ {result['error']}", "red"))
+            log_for_report(f"❌ {result['error']}", "error")
             return result
             
-        # Print content statistics
-        print(color_text("\nContent Statistics:", "cyan"))
-        print(color_text(f"→ Total files: {content_stats['total_files']}", "white"))
-        print(color_text(f"→ Total size: {content_stats['total_size'] / 1024 / 1024:.2f} MB", "white"))
+        # Print content statistics using actual PAK size
+        log_for_report("\nContent Statistics::", "info")
+        log_for_report(f"→ Total files: {content_stats['total_files']}", "info")
+        log_for_report(f"→ Total size: {size_mb:.2f} MB", "info")  # Use actual PAK size
         
         if content_stats["empty_files"] > 0:
-            print(color_text(f"⚠️ Found {content_stats['empty_files']} empty files", "yellow"))
+            log_for_report(f"⚠️ Found {content_stats['empty_files']} empty files", "warning")
             
         if content_stats["total_files"] == 0:
             result["error"] = "No valid files found in extracted content"
-            print(color_text(f"❌ {result['error']}", "red"))
+            log_for_report(f"❌ {result['error']}", "error")
             return result
             
         # Content validation passed
         results["content_check"] = True
         result["success"] = True
-        print(color_text("✓ Content validation passed", "green"))
+        log_for_report("✓ Content validation passed", "success")
         return result
         
     except Exception as e:
         result["error"] = f"Content integrity error: {str(e)}"
-        print(color_text(f"❌ {result['error']}", "red"))
+        log_for_report(f"❌ {result['error']}", "error")
         results["errors"].append(result["error"])
         return result
 
@@ -3036,7 +3186,7 @@ def validate_merged_pak_for_inclusion(pak_path):
 
 
 def main(pak_files):
-    """Version 2.3 - Enhanced sequence handling with improved merged PAK options"""
+    """Version 2.4 - Enhanced error handling and cleanup sequence"""
     print(color_text("\n# Python Merging for S2 HoC on nexusmods modified by nova", "cyan"))
     print(color_text("# credits to 63OR63 for original script", "cyan"))
     print(color_text("# https://www.nexusmods.com/stalker2heartofchornobyl/mods/413?tab=description", "cyan"))
@@ -3103,6 +3253,11 @@ def main(pak_files):
             print(color_text("\nRepacking files...", "white"))
             if not repack_pak():
                 raise RuntimeError("Failed to create merged PAK")
+                
+            # Clean up before exiting successfully
+            print(color_text("\nCleaning up temporary files...", "cyan"))
+            cleanup_temp_files()
+            
             input(color_text("\nPress Enter to close...", "cyan"))
             sys.exit(0)
         else:
@@ -3112,6 +3267,7 @@ def main(pak_files):
 
         if not winmerge_exists:
             print(color_text("\n❌ WinMerge is required for merging but was not found.", "red"))
+            cleanup_temp_files()  # Clean up before error exit
             sys.exit(1)
 
         print(color_text("\nStarting merge process...", "cyan"))
@@ -3119,6 +3275,7 @@ def main(pak_files):
 
         print(color_text(f"\nRepacking merged files...", "white"))
         if not repack_pak():
+            cleanup_temp_files()  # Clean up before error
             raise RuntimeError("Failed to create merged PAK")
 
         print(color_text("\nBacking up original PAK files...", "cyan"))
@@ -3133,13 +3290,14 @@ def main(pak_files):
         
     except Exception as e:
         print(color_text(f"\n❌ An error occurred: {str(e)}", "red"))
-        print(color_text("\nCleaning up...", "yellow"))
+        print(color_text("\nCleaning up after error...", "yellow"))
         try:
             cleanup_temp_files()
-        except:
-            pass
+        except Exception as cleanup_error:
+            print(color_text(f"Additional error during cleanup: {cleanup_error}", "red"))
         input(color_text("\nPress Enter to close...", "cyan"))
         sys.exit(1)
+
 
 
 
