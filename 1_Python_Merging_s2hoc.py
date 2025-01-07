@@ -10,9 +10,9 @@ import hashlib
 
 
 
-
-# Python Merge on nexusmods modifed by nova
-
+# 
+# Python Merge on nexusmods modifed by Takashi
+# 
 # credits to 63OR63 for original script
 # https://www.nexusmods.com/stalker2heartofchornobyl/mods/413?tab=description
 
@@ -23,7 +23,7 @@ CUSTOM_MODS_PATH = r"E:\s2hoc\Stalker2\Content\Paks\~mods"
 
 
 
-SCRIPT_VERSION = "2.4.1" 
+SCRIPT_VERSION = "2.4.2" 
 
 
 # Add with other globals at top
@@ -3184,6 +3184,138 @@ def validate_merged_pak_for_inclusion(pak_path):
 
 
 
+def analyze_conflicts_only(pak_files):
+    """Version 2.0 - Enhanced conflict analysis with validation"""
+    
+    # First verify critical dependencies
+    if not os.path.isfile(REPAK_PATH):
+        print(color_text(f"❌ Error: repak not found at {REPAK_PATH}", "red"))
+        return False
+
+    # Validate input PAKs before processing
+    valid_paks = []
+    invalid_paks = []
+    
+    print(color_text("\n=== Validating PAK Files ===", "cyan"))
+    for pak_file in pak_files:
+        try:
+            pak_path = Path(pak_file)
+            if not pak_path.exists():
+                invalid_paks.append((pak_file, "File not found"))
+                continue
+            if not pak_path.is_file():
+                invalid_paks.append((pak_file, "Not a file"))
+                continue
+            if pak_path.suffix.lower() != '.pak':
+                invalid_paks.append((pak_file, "Not a .pak file"))
+                continue
+            if pak_path.stat().st_size == 0:
+                invalid_paks.append((pak_file, "Empty file"))
+                continue
+                
+            # Quick structure check
+            result = subprocess.run(
+                [REPAK_PATH, "list", str(pak_path)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False
+            )
+            if result.returncode != 0:
+                invalid_paks.append((pak_file, f"Invalid PAK structure: {result.stderr.strip()}"))
+                continue
+                
+            valid_paks.append(pak_file)
+            print(color_text(f"✓ Validated: {pak_path.name}", "green"))
+            
+        except Exception as e:
+            invalid_paks.append((pak_file, f"Error: {str(e)}"))
+
+    if invalid_paks:
+        print(color_text("\n❌ Some PAKs failed validation:", "red"))
+        for pak, reason in invalid_paks:
+            print(color_text(f"  → {Path(pak).name}: {reason}", "red"))
+        if not valid_paks:
+            print(color_text("\nNo valid PAKs to analyze!", "red"))
+            return False
+        if not yes_or_no("\nContinue with valid PAKs only?"):
+            return False
+
+    try:
+        print(color_text("\n=== Starting PAK Analysis ===", "cyan"))
+        print(color_text(f"Processing {len(valid_paks)} valid PAK files...\n", "cyan"))
+
+        # Initialize cache for analysis
+        global pak_cache
+        pak_cache = PakCache()
+
+        # Process PAKs and build file tree with progress indicator
+        print(color_text("→ Reading PAK contents...", "cyan"))
+        pak_sources = process_pak_files(valid_paks, pak_cache)
+        
+        print(color_text("→ Building file tree...", "cyan"))
+        file_tree, file_count, file_sources, file_hashes = build_file_tree(pak_sources)
+
+        # Enhanced conflict analysis
+        conflicting_files = {}
+        conflict_details = defaultdict(list)
+        non_conflicting = 0
+        total_files = 0
+        
+        print(color_text("→ Analyzing conflicts...", "cyan"))
+        for file, sources in file_sources.items():
+            total_files += 1
+            hashes = file_hashes[file]
+            
+            # Detailed hash analysis
+            unique_hashes = set(hash_data[1] for hash_data in hashes.values() if hash_data[1] != 'Error')
+            if len(unique_hashes) > 1:
+                conflicting_files[file] = sources
+                # Store detailed conflict info
+                for mod_name, hash_data in hashes.items():
+                    size, file_hash = hash_data
+                    conflict_details[file].append({
+                        'mod': mod_name,
+                        'size': size,
+                        'hash': file_hash
+                    })
+            else:
+                non_conflicting += 1
+
+        # Display Enhanced Results
+        print(color_text("\n=== Analysis Results ===", "magenta"))
+        print(color_text(f"Total PAKs analyzed: {len(valid_paks)}", "cyan"))
+        print(color_text(f"Total files found: {total_files}", "cyan"))
+        print(color_text(f"Compatible files: {non_conflicting}", "green"))
+        print(color_text(f"Conflicting files: {len(conflicting_files)}", "yellow" if conflicting_files else "green"))
+
+        if conflicting_files:
+            print(color_text("\nDetailed Conflict Analysis:", "yellow"))
+            
+            # Enhanced conflict display with sizes and hashes
+            for file, details in conflict_details.items():
+                print(color_text(f"\nFile: {file}", "yellow"))
+                print(color_text("Affected by:", "cyan"))
+                for detail in details:
+                    size_str = f"{detail['size']/1024:.1f}KB" if isinstance(detail['size'], (int, float)) else 'Unknown'
+                    print(color_text(f"  → {detail['mod']}", "white"))
+                    print(color_text(f"     Size: {size_str}", "white"))
+                    print(color_text(f"     Hash: {detail['hash']}", "white"))
+                print() # Spacing between files
+        else:
+            print(color_text("\n✓ No conflicts detected - all files are compatible!", "green"))
+
+        return True
+
+    except Exception as e:
+        print(color_text(f"\n❌ Analysis error: {str(e)}", "red"))
+        return False
+    finally:
+        print(color_text("\n→ Cleaning up temporary files...", "cyan"))
+        cleanup_temp_files()
+
+
+
 
 def main(pak_files):
     """Version 2.4 - Enhanced error handling and cleanup sequence"""
@@ -3332,14 +3464,39 @@ if __name__ == "__main__":
         sys.exit(1)
 
     if len(sys.argv) < 2:
-        print(color_text("Usage: drag and drop .pak files onto this script.", "yellow"))
+        print(color_text("\n# Python Merging for S2 HoC on nexusmods modified by nova", "cyan"))
+        print(color_text("# credits to 63OR63 for original script", "cyan"))
+        print(color_text("# https://www.nexusmods.com/stalker2heartofchornobyl/mods/413?tab=description", "cyan"))
+        print(color_text(f"# Version {SCRIPT_VERSION}\n", "cyan")) 
+        
+        print(color_text("Usage:", "cyan"))
+        print(color_text("  Regular merge: Drag and drop PAK files onto the BAT file", "white"))
+        print(color_text("  Conflict check only: Add --analyze flag or use 2nd BAT file", "white"))
+        print(color_text("\nExample:", "cyan"))
+        print(color_text("  script.py --analyze file1.pak file2.pak", "white"))
         input(color_text("\nPress enter to close...", "cyan"))
         sys.exit(1)
 
-    pak_files = sys.argv[1:]
+    try:
+        # Check for analysis mode
+        if "--analyze" in sys.argv:
+            pak_files = [f for f in sys.argv[1:] if f != "--analyze"]
+            if not pak_files:
+                print(color_text("❌ No PAK files specified!", "red"))
+                sys.exit(1)
+            analyze_conflicts_only(pak_files)
+        else:
+            pak_files = sys.argv[1:]
+            main(pak_files)  # Original merge functionality
+            
+    except Exception as e:
+        print(color_text(f"\n❌ Fatal error: {str(e)}", "red"))
+    finally:
+        input(color_text("\nPress Enter to close...", "cyan"))
 
 
 
 
     main(pak_files)
+
 
